@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="A new Flutter project.">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="tin_can">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>tin_can</title>
+  <link rel="manifest" href="manifest.json">
+
+  <!-- Passkeys Web SDK — wymagane przez passkeys_web (tranzytywna zależność
+       supabase_flutter). Bez tego apka rzuca "Passkeys Web SDK not loaded"
+       i nie startuje na web. Ładujemy synchronicznie, przed flutter_bootstrap. -->
+  <script src="bundle.js"></script>
+
+  <!-- Krótki "ding" przy odebraniu rysunku (Web Audio, bez plików audio).
+       Wołane z Darta przez js_interop jako window.tinCanChime(). -->
+  <script>
+    window.tinCanChime = function () {
+      try {
+        var Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        window.__tinCanAudio = window.__tinCanAudio || new Ctx();
+        var ctx = window.__tinCanAudio;
+        if (ctx.state === 'suspended') ctx.resume();
+        var now = ctx.currentTime;
+        [[880, 0.0], [1320, 0.12]].forEach(function (pair) {
+          var o = ctx.createOscillator();
+          var g = ctx.createGain();
+          o.type = 'sine';
+          o.frequency.value = pair[0];
+          o.connect(g); g.connect(ctx.destination);
+          var t = now + pair[1];
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.exponentialRampToValueAtTime(0.2, t + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+          o.start(t); o.stop(t + 0.26);
+        });
+      } catch (e) {}
+    };
+  </script>
+</head>
+<body>
+  <!--
+    You can customize the "flutter_bootstrap.js" script.
+    This is useful to provide a custom configuration to the Flutter loader
+    or to give the user feedback during the initialization process.
+
+    For more details:
+    * https://docs.flutter.dev/platform-integration/web/initialization
+  -->
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
