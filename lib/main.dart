@@ -147,6 +147,12 @@ class _DrawingScreenState extends State<DrawingScreen>
   final List<ReceivedDrawing> _history = [];
   bool _historyLoading = true;
 
+  // #4: gdy mam na płótnie swój NIEWYSŁANY rysunek, przychodzący go nie kasuje —
+  // czeka jako "pending" za banerem (pokaże się po wysłaniu albo po dotknięciu).
+  bool _drawingMine = false;
+  // #4: MÓJ rysunek odłożony "do kieszeni", gdy przyszedł cudzy w trakcie rysowania.
+  List<Stroke>? _stashedMine;
+
   // Nasłuch realtime na rysunki przychodzące do nas.
   RealtimeChannel? _channel;
   // Animacja "materializacji" — odebrany rysunek odtwarza się kreska po kresce.
@@ -210,9 +216,19 @@ class _DrawingScreenState extends State<DrawingScreen>
           .map((r) => ReceivedDrawing.fromRow(r as Map<String, dynamic>, myId))
           .toList();
       if (mounted) {
-        setState(() => _history
-          ..clear()
-          ..addAll(items));
+        setState(() {
+          _history
+            ..clear()
+            ..addAll(items);
+          // #5: jeśli ostatni rysunek w wątku jest OD peera — pokaż go od razu
+          // na płótnie (nie tylko w historii). Bez animacji (to nie "na żywo").
+          if (items.isNotEmpty && !items.first.outgoing) {
+            _strokes
+              ..clear()
+              ..addAll(items.first.strokes);
+            _drawingMine = false;
+          }
+        });
       }
     } catch (e) {
       debugPrint('TINCAN_HISTORY_ERROR: $e');
@@ -231,6 +247,12 @@ class _DrawingScreenState extends State<DrawingScreen>
     debugPrint('TINCAN_RX: odebrano ${received.strokes.length} kresek od ${received.sender}');
 
     setState(() => _history.insert(0, received));
+
+    // #4: jeśli rysuję właśnie swoje (niewysłane) — odłóż je do kieszeni,
+    // pokaż normalnie przychodzący rysunek, a MÓJ da się przywrócić ikoną.
+    if (_drawingMine && _strokes.isNotEmpty) {
+      _stashedMine = List<Stroke>.from(_strokes);
+    }
     _materialize(received.strokes);
 
     // Miły "ding" — sygnał, że coś przyszło (Web Audio na web; na mobile cisza).
@@ -245,11 +267,28 @@ class _DrawingScreenState extends State<DrawingScreen>
         ..addAll(strokes);
       _currentStroke = null;
       _materializing = true;
+      _drawingMine = false; // płótno pokazuje teraz cudzy rysunek
     });
     // Czas odrysowywania ustawia odbiorca (suwak ⏱ w pasku u góry).
     _revealController
       ..duration = Duration(milliseconds: (_redrawSeconds * 1000).round())
       ..forward(from: 0.0);
+  }
+
+  // #4: przywróć MÓJ rysunek, który był w toku, gdy przyszedł cudzy.
+  void _restoreMine() {
+    final mine = _stashedMine;
+    if (mine == null) return;
+    _materializing = false;
+    _revealController.stop();
+    setState(() {
+      _strokes
+        ..clear()
+        ..addAll(mine);
+      _currentStroke = null;
+      _drawingMine = true;
+      _stashedMine = null;
+    });
   }
 
   @override
@@ -266,6 +305,9 @@ class _DrawingScreenState extends State<DrawingScreen>
     _materializing = false;
     _revealController.stop();
     setState(() {
+      // #5: jeśli na płótnie był cudzy (odebrany) rysunek — zaczynamy na czysto.
+      if (!_drawingMine) _strokes.clear();
+      _drawingMine = true; // to jest mój rysunek — chroń go przed nadpisaniem
       _currentStroke = Stroke(
         points: [position],
         // Gumka maluje na biało (kolor płótna) — prosto i skutecznie na tym etapie.
@@ -296,6 +338,8 @@ class _DrawingScreenState extends State<DrawingScreen>
     setState(() {
       _strokes.clear();
       _currentStroke = null;
+      _drawingMine = false;
+      _stashedMine = null;
     });
   }
 
@@ -468,6 +512,37 @@ class _DrawingScreenState extends State<DrawingScreen>
               ),
             ),
           ),
+          // #4: cudzy rysunek pokazał się normalnie, a Twój był w toku —
+          // ta ikona przywraca Twój rysunek.
+          if (_stashedMine != null)
+            Positioned(
+              top: 12,
+              left: 12,
+              right: 12,
+              child: Center(
+                child: Material(
+                  color: Colors.deepPurple,
+                  borderRadius: BorderRadius.circular(24),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(24),
+                    onTap: _restoreMine,
+                    child: const Padding(
+                      padding:
+                          EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.undo, color: Colors.white, size: 20),
+                          SizedBox(width: 8),
+                          Text('Przywróć swój rysunek',
+                              style: TextStyle(color: Colors.white)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           // Pigułka "coś przyszło" — widoczna podczas materializacji.
           Positioned(
             top: 12,
