@@ -107,14 +107,18 @@ class ReceivedDrawing {
 }
 
 class DrawingScreen extends StatefulWidget {
-  final String peerId; // user_id drugiej osoby (z puszki)
-  final String peerLabel; // @nazwa lub e-mail — do pokazania w pasku
+  final String? peerId; // 1:1: user_id drugiej osoby
+  final String? groupId; // grupa: id grupy (wtedy peerId == null)
+  final String peerLabel; // etykieta w pasku (osoba albo nazwa grupy)
 
   const DrawingScreen({
     super.key,
-    required this.peerId,
+    this.peerId,
+    this.groupId,
     required this.peerLabel,
   });
+
+  bool get isGroup => groupId != null;
 
   @override
   State<DrawingScreen> createState() => _DrawingScreenState();
@@ -127,7 +131,7 @@ class _DrawingScreenState extends State<DrawingScreen>
 
   // Tożsamości wątku: ja = zalogowane konto, peer = druga osoba z puszki.
   late final String myId;
-  String get peerId => widget.peerId;
+  String? get peerId => widget.peerId;
 
   // Wszystkie ukończone kreski.
   final List<Stroke> _strokes = [];
@@ -205,13 +209,20 @@ class _DrawingScreenState extends State<DrawingScreen>
   // Wczytanie historii odebranych rysunków z bazy (najnowsze pierwsze).
   Future<void> _loadHistory() async {
     try {
-      final rows = await supabase
+      final base = supabase
           .from('drawings')
-          .select('sender, recipient, created_at, strokes')
-          .or('and(sender.eq.$myId,recipient.eq.$peerId),'
-              'and(sender.eq.$peerId,recipient.eq.$myId)')
-          .order('created_at', ascending: false)
-          .limit(50);
+          .select('sender, recipient, created_at, strokes');
+      final rows = widget.isGroup
+          ? await base
+              .eq('group_id', widget.groupId!)
+              .eq('recipient', myId)
+              .order('created_at', ascending: false)
+              .limit(50)
+          : await base
+              .or('and(sender.eq.$myId,recipient.eq.${widget.peerId}),'
+                  'and(sender.eq.${widget.peerId},recipient.eq.$myId)')
+              .order('created_at', ascending: false)
+              .limit(50);
       final items = (rows as List)
           .map((r) => ReceivedDrawing.fromRow(r as Map<String, dynamic>, myId))
           .toList();
@@ -238,8 +249,14 @@ class _DrawingScreenState extends State<DrawingScreen>
   }
 
   void _onIncoming(PostgresChangePayload payload) {
-    // Ten ekran dotyczy jednej puszki — ignoruj rysunki od innych osób.
-    if (payload.newRecord['sender'] != widget.peerId) return;
+    final rec = payload.newRecord;
+    if (widget.isGroup) {
+      // grupa: rysunki tej grupy, ale nie własne echo (self-kopia)
+      if (rec['group_id'] != widget.groupId || rec['sender'] == myId) return;
+    } else {
+      // 1:1: tylko od peera i tylko nie-grupowe
+      if (rec['group_id'] != null || rec['sender'] != widget.peerId) return;
+    }
     final received = ReceivedDrawing.fromRow(
       Map<String, dynamic>.from(payload.newRecord),
       myId,
@@ -349,20 +366,27 @@ class _DrawingScreenState extends State<DrawingScreen>
     final snapshot = List<Stroke>.from(_strokes);
     final strokesJson = snapshot.map((s) => s.toJson()).toList();
     try {
-      await supabase.from('drawings').insert({
-        'sender': myId,
-        'recipient': peerId,
-        'strokes': strokesJson,
-      });
-      // Własna subskrypcja łapie tylko to, co PRZYCHODZI — wysłane dokładamy sami.
+      if (widget.isGroup) {
+        await supabase.rpc('send_group_drawing', params: {
+          'p_group_id': widget.groupId,
+          'p_strokes': strokesJson,
+        });
+      } else {
+        await supabase.from('drawings').insert({
+          'sender': myId,
+          'recipient': widget.peerId,
+          'strokes': strokesJson,
+        });
+      }
+      // Do lokalnej historii (natychmiastowy podgląd; reload i tak dociągnie).
       setState(() {
         _history.insert(
           0,
           ReceivedDrawing(
             sender: myId,
-            recipient: peerId,
+            recipient: widget.peerId ?? myId,
             outgoing: true,
-            other: peerId,
+            other: widget.peerId ?? '',
             createdAt: DateTime.now(),
             strokes: snapshot,
           ),
@@ -476,7 +500,7 @@ class _DrawingScreenState extends State<DrawingScreen>
           IconButton(
             icon: const Icon(Icons.send),
             onPressed: _send,
-            tooltip: 'Wyślij do $peerId',
+            tooltip: 'Wyślij',
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline),

@@ -44,6 +44,10 @@ Deno.serve(async (req) => {
     const recipient = record?.recipient as string | undefined;
     const sender = record?.sender as string | undefined;
     if (!recipient) return new Response("no recipient", { status: 200 });
+    // #3 grupy: nie wysyłaj push do samego siebie (self-kopia nadawcy).
+    if (sender && sender === recipient) {
+      return new Response("self", { status: 200 });
+    }
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,

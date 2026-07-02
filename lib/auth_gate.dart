@@ -247,6 +247,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _error;
   String? _myUsername;
   List<Puszka> _puszki = [];
+  List<Map<String, dynamic>> _groups = []; // #3: grupy (id, name)
 
   @override
   void initState() {
@@ -309,9 +310,13 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       }).toList();
 
+      final gs = await _supabase.from('groups').select('id, name');
+      final groups = (gs as List).cast<Map<String, dynamic>>();
+
       if (mounted) {
         setState(() {
           _puszki = puszki;
+          _groups = groups;
           _loading = false;
         });
       }
@@ -369,6 +374,92 @@ class _HomeScreenState extends State<HomeScreen> {
             .showSnackBar(SnackBar(content: Text(msg)));
       }
       if (status == 'ok') _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Błąd: $e')));
+      }
+    }
+  }
+
+  // #3: utwórz grupę — nazwa + wybór członków spośród zaakceptowanych znajomych.
+  Future<void> _createGroup() async {
+    final accepted = _puszki.where((p) => p.status == 'accepted').toList();
+    if (accepted.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Najpierw dodaj znajomych — z nich tworzysz grupę.')));
+      return;
+    }
+    final nameCtrl = TextEditingController();
+    final selected = <String>{};
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setSt) {
+        return AlertDialog(
+          title: const Text('Nowa grupa'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                      labelText: 'Nazwa grupy', border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 8),
+                const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Członkowie:')),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: accepted
+                        .map((p) => CheckboxListTile(
+                              value: selected.contains(p.otherId),
+                              title: Text(p.label),
+                              onChanged: (v) => setSt(() {
+                                if (v == true) {
+                                  selected.add(p.otherId);
+                                } else {
+                                  selected.remove(p.otherId);
+                                }
+                              }),
+                            ))
+                        .toList(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Anuluj')),
+            FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Utwórz')),
+          ],
+        );
+      }),
+    );
+    if (ok != true) return;
+    final name = nameCtrl.text.trim();
+    if (name.isEmpty || selected.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Podaj nazwę i zaznacz min. jedną osobę.')));
+      }
+      return;
+    }
+    try {
+      await _supabase.rpc('create_group',
+          params: {'p_name': name, 'p_member_ids': selected.toList()});
+      _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Grupa „$name" utworzona 👥')));
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -497,6 +588,11 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Twoje puszki'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.group_add),
+            tooltip: 'Nowa grupa',
+            onPressed: _createGroup,
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Odśwież',
             onPressed: _load,
@@ -562,7 +658,7 @@ class _HomeScreenState extends State<HomeScreen> {
         .where((p) => p.status == 'pending' && p.requestedByMe)
         .toList();
 
-    if (_puszki.isEmpty) {
+    if (_puszki.isEmpty && _groups.isEmpty) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
@@ -600,6 +696,27 @@ class _HomeScreenState extends State<HomeScreen> {
                       onPressed: () => _respond(p.connectionId, false),
                     ),
                   ],
+                ),
+              )),
+          const Divider(),
+        ],
+        if (_groups.isNotEmpty) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Text('👥 Grupy',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+          ..._groups.map((g) => ListTile(
+                leading: const Text('👥', style: TextStyle(fontSize: 26)),
+                title: Text(g['name'] as String? ?? 'Grupa'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => DrawingScreen(
+                      groupId: g['id'] as String,
+                      peerLabel: g['name'] as String? ?? 'Grupa',
+                    ),
+                  ),
                 ),
               )),
           const Divider(),
