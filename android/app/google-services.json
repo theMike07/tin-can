@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "534044828771",
+    "project_id": "tin-can-d1502",
+    "storage_bucket": "tin-can-d1502.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:534044828771:android:b69caa4e963fdc891d8456",
+        "android_client_info": {
+          "package_name": "pl.themike07.tincan"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB7WpZqz9BKpvQXTD-Atcj7hfMDZa47JPA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

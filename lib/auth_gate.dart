@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'main.dart';
+import 'push.dart';
 
 // Google: wymaga konfiguracji w Google Cloud + Supabase (Client ID/Secret).
 const bool kGoogleReady = true;
@@ -246,6 +247,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _load();
+    registerPushToken(); // zarejestruj urządzenie do powiadomień push
   }
 
   Future<void> _load() async {

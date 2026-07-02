@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Supabase / realtime — dostęp do sieci -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Powiadomienia push (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="Tin Can"
         android:name="${applicationName}"
