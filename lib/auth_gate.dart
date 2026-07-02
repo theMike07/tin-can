@@ -94,8 +94,9 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       await _supabase.auth.signInWithOAuth(
         OAuthProvider.google,
-        // Po logowaniu wróć do tej samej strony (dla web).
-        redirectTo: kIsWeb ? Uri.base.origin : null,
+        // Web: powrót na tę samą stronę. Mobile: deep link z powrotem do apki.
+        redirectTo:
+            kIsWeb ? Uri.base.origin : 'pl.themike07.tincan://login-callback',
       );
     } catch (e) {
       setState(() => _error = 'Logowanie Google nie powiodło się: $e');
