@@ -217,11 +217,15 @@ class Puszka {
   final String otherId;
   final String otherEmail;
   final String? otherUsername;
+  final String status; // 'pending' | 'accepted'
+  final bool requestedByMe; // czy JA wysłałem zaproszenie
   Puszka({
     required this.connectionId,
     required this.otherId,
     required this.otherEmail,
     required this.otherUsername,
+    required this.status,
+    required this.requestedByMe,
   });
 
   // Tytuł puszki: @nazwa jeśli jest, inaczej e-mail.
@@ -267,17 +271,18 @@ class _HomeScreenState extends State<HomeScreen> {
           .maybeSingle();
       _myUsername = myProfile?['username'] as String?;
 
-      final conns =
-          await _supabase.from('connections').select('id, user_a, user_b');
+      final conns = await _supabase
+          .from('connections')
+          .select('id, user_a, user_b, status, requested_by');
 
       final otherIds = <String>[];
-      final connByOther = <String, String>{};
+      final connByOther = <String, Map<String, dynamic>>{};
       for (final c in (conns as List)) {
         final a = c['user_a'] as String;
         final b = c['user_b'] as String;
         final other = a == me ? b : a;
         otherIds.add(other);
-        connByOther[other] = c['id'] as String;
+        connByOther[other] = c as Map<String, dynamic>;
       }
 
       final profById = <String, Map<String, dynamic>>{};
@@ -293,11 +298,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final puszki = otherIds.map((id) {
         final p = profById[id];
+        final c = connByOther[id]!;
         return Puszka(
-          connectionId: connByOther[id]!,
+          connectionId: c['id'] as String,
           otherId: id,
           otherEmail: (p?['email'] as String?) ?? '—',
           otherUsername: p?['username'] as String?,
+          status: (c['status'] as String?) ?? 'accepted',
+          requestedByMe: c['requested_by'] == me,
         );
       }).toList();
 
@@ -402,7 +410,7 @@ class _HomeScreenState extends State<HomeScreen> {
           .rpc('add_connection', params: {'identifier': value.trim()});
       final status = res as String?;
       final msg = switch (status) {
-        'ok' => 'Dodano! 🥫',
+        'ok' => 'Zaproszenie wysłane 📨',
         'not_found' => 'Nie znaleziono osoby o tej nazwie lub e-mailu.',
         'self' => 'To Ty 🙂',
         'not_authenticated' => 'Najpierw się zaloguj.',
@@ -413,6 +421,30 @@ class _HomeScreenState extends State<HomeScreen> {
             .showSnackBar(SnackBar(content: Text(msg)));
       }
       if (status == 'ok') _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Błąd: $e')));
+      }
+    }
+  }
+
+  // #1: akceptacja/odrzucenie zaproszenia.
+  Future<void> _respond(String connId, bool accept) async {
+    try {
+      final res = await _supabase.rpc('respond_connection',
+          params: {'conn_id': connId, 'accept': accept});
+      final status = res as String?;
+      final msg = switch (status) {
+        'accepted' => 'Zaakceptowano 🥫',
+        'rejected' => 'Odrzucono',
+        _ => 'Nie udało się ($status).',
+      };
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
+      }
+      _load();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -479,47 +511,90 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                     ),
-                    Expanded(
-                      child: _puszki.isEmpty
-                          ? const Center(
-                              child: Padding(
-                                padding: EdgeInsets.all(24),
-                                child: Text(
-                                  'Brak puszek.\nDodaj kogoś (➕) po nazwie lub e-mailu. 🥫',
-                                  textAlign: TextAlign.center,
-                                ),
-                              ),
-                            )
-                          : ListView.separated(
-                              itemCount: _puszki.length,
-                              separatorBuilder: (_, _) =>
-                                  const Divider(height: 1),
-                              itemBuilder: (context, i) {
-                                final p = _puszki[i];
-                                final hasName = p.otherUsername != null &&
-                                    p.otherUsername!.isNotEmpty;
-                                return ListTile(
-                                  leading: const Text('🥫',
-                                      style: TextStyle(fontSize: 28)),
-                                  title: Text(p.label),
-                                  subtitle: hasName ? Text(p.otherEmail) : null,
-                                  trailing: const Icon(Icons.chevron_right),
-                                  onTap: () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (_) => DrawingScreen(
-                                          peerId: p.otherId,
-                                          peerLabel: p.label,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                );
-                              },
-                            ),
+                    Expanded(child: _buildList()),
+                  ],
+                ),
+    );
+  }
+
+  Widget _buildList() {
+    final incoming = _puszki
+        .where((p) => p.status == 'pending' && !p.requestedByMe)
+        .toList();
+    final accepted = _puszki.where((p) => p.status == 'accepted').toList();
+    final outgoing = _puszki
+        .where((p) => p.status == 'pending' && p.requestedByMe)
+        .toList();
+
+    if (_puszki.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text(
+            'Brak puszek.\nDodaj kogoś (➕) po nazwie lub e-mailu. 🥫',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+
+    return ListView(
+      children: [
+        if (incoming.isNotEmpty) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Text('📨 Zaproszenia',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+          ...incoming.map((p) => ListTile(
+                leading: const Text('📨', style: TextStyle(fontSize: 26)),
+                title: Text(p.label),
+                subtitle: const Text('chce się z Tobą połączyć'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.check_circle, color: Colors.green),
+                      tooltip: 'Akceptuj',
+                      onPressed: () => _respond(p.connectionId, true),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.cancel, color: Colors.red),
+                      tooltip: 'Odrzuć',
+                      onPressed: () => _respond(p.connectionId, false),
                     ),
                   ],
                 ),
+              )),
+          const Divider(),
+        ],
+        ...accepted.map((p) {
+          final hasName =
+              p.otherUsername != null && p.otherUsername!.isNotEmpty;
+          return ListTile(
+            leading: const Text('🥫', style: TextStyle(fontSize: 28)),
+            title: Text(p.label),
+            subtitle: hasName ? Text(p.otherEmail) : null,
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => DrawingScreen(
+                    peerId: p.otherId,
+                    peerLabel: p.label,
+                  ),
+                ),
+              );
+            },
+          );
+        }),
+        ...outgoing.map((p) => ListTile(
+              enabled: false,
+              leading: const Text('⏳', style: TextStyle(fontSize: 24)),
+              title: Text(p.label),
+              subtitle: const Text('wysłano — oczekuje na akceptację'),
+            )),
+      ],
     );
   }
 }
