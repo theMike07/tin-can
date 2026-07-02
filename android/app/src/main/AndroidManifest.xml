@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Supabase / realtime — dostęp do sieci -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="tin_can"
+        android:label="Tin Can"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

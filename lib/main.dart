@@ -1,12 +1,8 @@
-import 'dart:js_interop';
-
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-// Krótki "ding" zdefiniowany w web/index.html (Web Audio). Wołany przy odbiorze.
-@JS('tinCanChime')
-external void _tinCanChime();
+import 'auth_gate.dart';
+import 'chime.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,7 +21,7 @@ class TinCanApp extends StatelessWidget {
     return MaterialApp(
       title: 'Tin Can',
       debugShowCheckedModeBanner: false,
-      home: const DrawingScreen(),
+      home: const AuthGate(),
     );
   }
 }
@@ -109,7 +105,14 @@ class ReceivedDrawing {
 }
 
 class DrawingScreen extends StatefulWidget {
-  const DrawingScreen({super.key});
+  final String peerId; // user_id drugiej osoby (z puszki)
+  final String peerLabel; // @nazwa lub e-mail — do pokazania w pasku
+
+  const DrawingScreen({
+    super.key,
+    required this.peerId,
+    required this.peerLabel,
+  });
 
   @override
   State<DrawingScreen> createState() => _DrawingScreenState();
@@ -120,10 +123,9 @@ class _DrawingScreenState extends State<DrawingScreen>
   // Połączenie z bazą.
   final supabase = Supabase.instance.client;
 
-  // Tymczasowe tożsamości (sztywny drut). Domyślnie to urządzenie A.
-  // Na web można przełączyć drugi koniec adresem ...?me=B (wtedy peer to A).
+  // Tożsamości wątku: ja = zalogowane konto, peer = druga osoba z puszki.
   late final String myId;
-  late final String peerId;
+  String get peerId => widget.peerId;
 
   // Wszystkie ukończone kreski.
   final List<Stroke> _strokes = [];
@@ -145,9 +147,6 @@ class _DrawingScreenState extends State<DrawingScreen>
 
   // Nasłuch realtime na rysunki przychodzące do nas.
   RealtimeChannel? _channel;
-  // Kto przysłał ostatni rysunek (do pokazania w UI). null = nic nie przyszło.
-  String? _incomingFrom;
-
   // Animacja "materializacji" — odebrany rysunek odtwarza się kreska po kresce.
   late final AnimationController _revealController;
   // Czy właśnie odtwarzamy przychodzący rysunek (wtedy odsłaniamy stopniowo).
@@ -160,9 +159,7 @@ class _DrawingScreenState extends State<DrawingScreen>
   @override
   void initState() {
     super.initState();
-    final me = Uri.base.queryParameters['me'];
-    myId = (me == 'B') ? 'B' : 'A';
-    peerId = (myId == 'A') ? 'B' : 'A';
+    myId = supabase.auth.currentUser!.id;
 
     _revealController = AnimationController(vsync: this, value: 1.0)
       ..addListener(() => setState(() {}))
@@ -203,7 +200,8 @@ class _DrawingScreenState extends State<DrawingScreen>
       final rows = await supabase
           .from('drawings')
           .select('sender, recipient, created_at, strokes')
-          .or('sender.eq.$myId,recipient.eq.$myId')
+          .or('and(sender.eq.$myId,recipient.eq.$peerId),'
+              'and(sender.eq.$peerId,recipient.eq.$myId)')
           .order('created_at', ascending: false)
           .limit(50);
       final items = (rows as List)
@@ -222,6 +220,8 @@ class _DrawingScreenState extends State<DrawingScreen>
   }
 
   void _onIncoming(PostgresChangePayload payload) {
+    // Ten ekran dotyczy jednej puszki — ignoruj rysunki od innych osób.
+    if (payload.newRecord['sender'] != widget.peerId) return;
     final received = ReceivedDrawing.fromRow(
       Map<String, dynamic>.from(payload.newRecord),
       myId,
@@ -229,24 +229,19 @@ class _DrawingScreenState extends State<DrawingScreen>
     debugPrint('TINCAN_RX: odebrano ${received.strokes.length} kresek od ${received.sender}');
 
     setState(() => _history.insert(0, received));
-    _materialize(received.strokes, from: received.sender);
+    _materialize(received.strokes);
 
-    // Miły "ding" — sygnał, że coś przyszło. Web Audio z index.html.
-    if (kIsWeb) {
-      try {
-        _tinCanChime();
-      } catch (_) {}
-    }
+    // Miły "ding" — sygnał, że coś przyszło (Web Audio na web; na mobile cisza).
+    playChime();
   }
 
   // Wrzuca dany rysunek na płótno i odpala animację materializacji.
-  void _materialize(List<Stroke> strokes, {String? from}) {
+  void _materialize(List<Stroke> strokes) {
     setState(() {
       _strokes
         ..clear()
         ..addAll(strokes);
       _currentStroke = null;
-      _incomingFrom = from;
       _materializing = true;
     });
     // Czas odrysowywania ustawia odbiorca (suwak ⏱ w pasku u góry).
@@ -299,7 +294,6 @@ class _DrawingScreenState extends State<DrawingScreen>
     setState(() {
       _strokes.clear();
       _currentStroke = null;
-      _incomingFrom = null;
     });
   }
 
@@ -409,7 +403,7 @@ class _DrawingScreenState extends State<DrawingScreen>
     );
     if (picked != null) {
       _revealController.stop();
-      _materialize(picked.strokes, from: picked.sender);
+      _materialize(picked.strokes);
     }
   }
 
@@ -417,7 +411,7 @@ class _DrawingScreenState extends State<DrawingScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Tin Can — $myId → $peerId'),
+        title: Text('🥫 ${widget.peerLabel}'),
         actions: [
           IconButton(
             icon: Badge(
@@ -490,7 +484,7 @@ class _DrawingScreenState extends State<DrawingScreen>
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
-                      '✍️ ${_incomingFrom ?? peerId} rysuje dla Ciebie…',
+                      '✍️ ${widget.peerLabel} rysuje dla Ciebie…',
                       style: const TextStyle(color: Colors.white, fontSize: 14),
                     ),
                   ),
