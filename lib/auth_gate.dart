@@ -429,6 +429,42 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // #2: usuwanie znajomego / anulowanie zaproszenia.
+  Future<void> _doRemove(String connId) async {
+    try {
+      await _supabase.rpc('remove_connection', params: {'conn_id': connId});
+      _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Błąd: $e')));
+      }
+    }
+  }
+
+  Future<void> _removeFriend(String connId, String label) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Usunąć znajomego?'),
+        content: Text(
+            'Usunąć połączenie z $label? Rysunki zostaną w historii, ale nie wyślecie już nowych.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Anuluj'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Usuń'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) _doRemove(connId);
+  }
+
   // #1: akceptacja/odrzucenie zaproszenia.
   Future<void> _respond(String connId, bool accept) async {
     try {
@@ -575,7 +611,14 @@ class _HomeScreenState extends State<HomeScreen> {
             leading: const Text('🥫', style: TextStyle(fontSize: 28)),
             title: Text(p.label),
             subtitle: hasName ? Text(p.otherEmail) : null,
-            trailing: const Icon(Icons.chevron_right),
+            trailing: PopupMenuButton<String>(
+              onSelected: (v) {
+                if (v == 'remove') _removeFriend(p.connectionId, p.label);
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'remove', child: Text('Usuń znajomego')),
+              ],
+            ),
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
@@ -589,10 +632,14 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         }),
         ...outgoing.map((p) => ListTile(
-              enabled: false,
               leading: const Text('⏳', style: TextStyle(fontSize: 24)),
               title: Text(p.label),
               subtitle: const Text('wysłano — oczekuje na akceptację'),
+              trailing: IconButton(
+                icon: const Icon(Icons.close),
+                tooltip: 'Anuluj zaproszenie',
+                onPressed: () => _doRemove(p.connectionId),
+              ),
             )),
       ],
     );
