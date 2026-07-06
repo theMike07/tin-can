@@ -36,8 +36,14 @@ class Stroke {
   final List<Offset> points;
   final Color color;
   final double width;
+  final bool isEraser; // gumka: wycinamy tusz (BlendMode.clear), nie malujemy
 
-  Stroke({required this.points, required this.color, required this.width});
+  Stroke({
+    required this.points,
+    required this.color,
+    required this.width,
+    this.isEraser = false,
+  });
 
   // Kreska -> JSON do bazy. Kolor jako RRGGBB (hex), punkty spłaszczone [dx,dy,dx,dy,...].
   Map<String, dynamic> toJson() {
@@ -337,9 +343,11 @@ class _DrawingScreenState extends State<DrawingScreen>
       _drawingMine = true; // to jest mój rysunek — chroń go przed nadpisaniem
       _currentStroke = Stroke(
         points: [position],
-        // Gumka maluje na biało (kolor płótna) — prosto i skutecznie na tym etapie.
+        // Gumka wycina tusz (patrz DrawingPainter) — kolor bez znaczenia dla
+        // renderu, ale zostaje biały dla zapisu i podglądu u odbiorcy.
         color: _eraser ? Colors.white : _brushColor,
         width: _eraser ? 18.0 : _brushWidth,
+        isEraser: _eraser,
       );
     });
   }
@@ -774,7 +782,10 @@ class DrawingPainter extends CustomPainter {
       ..strokeWidth = stroke.width
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
-      ..style = PaintingStyle.stroke;
+      ..style = PaintingStyle.stroke
+      // Gumka wycina tusz z warstwy (odsłania kratkę/papier pod spodem),
+      // zamiast malować biel na wierzchu.
+      ..blendMode = stroke.isEraser ? BlendMode.clear : BlendMode.srcOver;
 
     final path = Path()
       ..moveTo(stroke.points.first.dx, stroke.points.first.dy);
@@ -790,6 +801,9 @@ class DrawingPainter extends CustomPainter {
     final total = strokes.fold<int>(0, (sum, s) => sum + s.points.length);
     var target = (reveal.clamp(0.0, 1.0) * total).round();
 
+    // Osobna warstwa na tusz: dzięki niej gumka (BlendMode.clear) wycina TYLKO
+    // tusz, a kratka/papier pod spodem (rysowane niżej) zostają nietknięte.
+    canvas.saveLayer(Offset.zero & size, Paint());
     for (final stroke in strokes) {
       if (target <= 0) break;
       _drawStroke(canvas, stroke, target);
@@ -800,6 +814,7 @@ class DrawingPainter extends CustomPainter {
     if (currentStroke != null) {
       _drawStroke(canvas, currentStroke!, currentStroke!.points.length);
     }
+    canvas.restore();
   }
 
   @override
