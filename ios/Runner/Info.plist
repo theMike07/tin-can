@@ -26,6 +26,23 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- image_picker: dostęp do biblioteki zdjęć (obrazek profilowy) -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Tin Can potrzebuje dostępu do zdjęć, aby ustawić Twój obrazek profilowy.</string>
+	<!-- Powrót do apki po logowaniu Google/OAuth (deep link jak na Androidzie) -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>pl.themike07.tincan</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>pl.themike07.tincan</string>
+			</array>
+		</dict>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
