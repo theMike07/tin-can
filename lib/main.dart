@@ -3,7 +3,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'auth_gate.dart';
 import 'chime.dart';
+import 'logo.dart';
 import 'push.dart';
+import 'theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,6 +25,7 @@ class TinCanApp extends StatelessWidget {
     return MaterialApp(
       title: 'Tin Can',
       debugShowCheckedModeBanner: false,
+      theme: buildTinCanTheme(),
       home: const AuthGate(),
     );
   }
@@ -167,6 +170,13 @@ class _DrawingScreenState extends State<DrawingScreen>
   // Ułamek punktów do pokazania: w trakcie materializacji rośnie 0->1,
   // poza nią zawsze 1.0 (własne kreski widać natychmiast).
   double get _reveal => _materializing ? _revealController.value : 1.0;
+
+  // Kratka pomocnicza na płótnie: pokazuj, gdy rysuję swoje albo płótno jest
+  // puste; chowaj, gdy pojawia się rysunek OD kogoś (materializacja/odebrany) —
+  // wtedy rysunek „ląduje" na czystej kartce.
+  bool get _showGrid =>
+      _drawingMine ||
+      (_strokes.isEmpty && _currentStroke == null && !_materializing);
 
   @override
   void initState() {
@@ -481,7 +491,16 @@ class _DrawingScreenState extends State<DrawingScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('🥫 ${widget.peerLabel}'),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const TinCanLogo(width: 26),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(widget.peerLabel, overflow: TextOverflow.ellipsis),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             icon: Badge(
@@ -527,12 +546,24 @@ class _DrawingScreenState extends State<DrawingScreen>
               color: Colors.white,
               width: double.infinity,
               height: double.infinity,
-              child: CustomPaint(
-                painter: DrawingPainter(
-                  strokes: _strokes,
-                  currentStroke: _currentStroke,
-                  reveal: _reveal,
-                ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // Kratka pomocnicza — płynnie znika, gdy nadchodzi rysunek.
+                  AnimatedOpacity(
+                    opacity: _showGrid ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 400),
+                    curve: Curves.easeOut,
+                    child: CustomPaint(painter: _CanvasGridPainter()),
+                  ),
+                  CustomPaint(
+                    painter: DrawingPainter(
+                      strokes: _strokes,
+                      currentStroke: _currentStroke,
+                      reveal: _reveal,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -545,8 +576,10 @@ class _DrawingScreenState extends State<DrawingScreen>
               right: 12,
               child: Center(
                 child: Material(
-                  color: Colors.deepPurple,
+                  color: TC.brand,
                   borderRadius: BorderRadius.circular(24),
+                  elevation: 3,
+                  shadowColor: TC.brand.withValues(alpha: 0.5),
                   child: InkWell(
                     borderRadius: BorderRadius.circular(24),
                     onTap: _restoreMine,
@@ -581,7 +614,7 @@ class _DrawingScreenState extends State<DrawingScreen>
                     padding:
                         const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                     decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.75),
+                      color: TC.ink.withValues(alpha: 0.82),
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
@@ -613,39 +646,50 @@ class _DrawingScreenState extends State<DrawingScreen>
   static const List<double> _brushWidths = [2.0, 6.0, 12.0];
 
   Widget _buildToolbar() {
-    return SafeArea(
-      top: false,
-      child: Container(
-        height: 60,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(top: BorderSide(color: Colors.black12)),
-        ),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              for (final c in _palette) _colorSwatch(c),
-              Container(
-                width: 1,
-                height: 28,
-                margin: const EdgeInsets.symmetric(horizontal: 8),
-                color: Colors.black12,
-              ),
-              for (final w in _brushWidths) _widthDot(w),
-              const SizedBox(width: 4),
-              IconButton(
-                onPressed: () => setState(() => _eraser = !_eraser),
-                icon: const Icon(Icons.auto_fix_high),
-                tooltip: 'Gumka',
-                style: IconButton.styleFrom(
-                  backgroundColor:
-                      _eraser ? Colors.blue.withValues(alpha: 0.15) : null,
-                  foregroundColor: _eraser ? Colors.blue : Colors.black54,
+    return Container(
+      decoration: BoxDecoration(
+        // Kremowy papier — wyraźnie odcina pasek od białego płótna.
+        color: TC.paper2,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        boxShadow: [
+          BoxShadow(
+            color: TC.ink.withValues(alpha: 0.12),
+            blurRadius: 18,
+            offset: const Offset(0, -4),
+            spreadRadius: -2,
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: 62,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                for (final c in _palette) _colorSwatch(c),
+                Container(
+                  width: 1,
+                  height: 28,
+                  margin: const EdgeInsets.symmetric(horizontal: 10),
+                  color: TC.ink.withValues(alpha: 0.14),
                 ),
-              ),
-            ],
+                for (final w in _brushWidths) _widthDot(w),
+                const SizedBox(width: 4),
+                IconButton(
+                  onPressed: () => setState(() => _eraser = !_eraser),
+                  icon: const Icon(Icons.auto_fix_high),
+                  tooltip: 'Gumka',
+                  style: IconButton.styleFrom(
+                    backgroundColor:
+                        _eraser ? TC.brand.withValues(alpha: 0.15) : null,
+                    foregroundColor: _eraser ? TC.brand : TC.inkSoft,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -667,7 +711,7 @@ class _DrawingScreenState extends State<DrawingScreen>
           color: c,
           shape: BoxShape.circle,
           border: Border.all(
-            color: selected ? Colors.blue : Colors.black26,
+            color: selected ? TC.brand : Colors.black26,
             width: selected ? 3 : 1,
           ),
         ),
@@ -688,7 +732,7 @@ class _DrawingScreenState extends State<DrawingScreen>
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           border: Border.all(
-            color: selected ? Colors.blue : Colors.transparent,
+            color: selected ? TC.brand : Colors.transparent,
             width: 2,
           ),
         ),
@@ -697,7 +741,7 @@ class _DrawingScreenState extends State<DrawingScreen>
             width: w + 8,
             height: w + 8,
             decoration: const BoxDecoration(
-              color: Colors.black,
+              color: TC.ink,
               shape: BoxShape.circle,
             ),
           ),
@@ -766,6 +810,26 @@ class DrawingPainter extends CustomPainter {
   bool shouldRepaint(DrawingPainter oldDelegate) => true;
 }
 
+// Kratka pomocnicza na płótnie — te same proporcje/kolor co siatka tła apki.
+class _CanvasGridPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final line = Paint()
+      ..color = TC.ink.withValues(alpha: 0.05)
+      ..strokeWidth = 1;
+    const step = 44.0;
+    for (double x = step; x < size.width; x += step) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), line);
+    }
+    for (double y = step; y < size.height; y += step) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), line);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
 // Ekran galerii — siatka miniatur odebranych rysunków. Klik = zwróć wybrany.
 class GalleryScreen extends StatelessWidget {
   final List<ReceivedDrawing> history;
@@ -789,15 +853,17 @@ class GalleryScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Historia')),
-      body: loading
+      body: PaperBackground(
+        child: loading
           ? const Center(child: CircularProgressIndicator())
           : history.isEmpty
-              ? const Center(
+              ? Center(
                   child: Padding(
-                    padding: EdgeInsets.all(32),
+                    padding: const EdgeInsets.all(32),
                     child: Text(
-                      'Tu pojawią się Twoje rysunki — wysłane i odebrane. 🐱',
+                      'Tu pojawią się Twoje rysunki —\nwysłane i odebrane. 🐱',
                       textAlign: TextAlign.center,
+                      style: handStyle(size: 24),
                     ),
                   ),
                 )
@@ -838,8 +904,9 @@ class GalleryScreen extends StatelessWidget {
                                         ? Icons.north_east
                                         : Icons.south_west,
                                     size: 15,
-                                    color:
-                                        d.outgoing ? Colors.blue : Colors.green,
+                                    color: d.outgoing
+                                        ? TC.brand
+                                        : const Color(0xFF2E9E5B),
                                   ),
                                   const SizedBox(width: 4),
                                   Expanded(
@@ -855,7 +922,7 @@ class GalleryScreen extends StatelessWidget {
                                   Text(
                                     _ago(d.createdAt),
                                     style: const TextStyle(
-                                        fontSize: 11, color: Colors.black54),
+                                        fontSize: 11, color: TC.inkSoft),
                                   ),
                                 ],
                               ),
@@ -866,6 +933,7 @@ class GalleryScreen extends StatelessWidget {
                     );
                   },
                 ),
+        ),
     );
   }
 }

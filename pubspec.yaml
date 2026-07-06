@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.1.0+2
+version: 1.2.0+3
 
 environment:
   sdk: ^3.12.2
@@ -37,6 +37,8 @@ dependencies:
   supabase_flutter: ^2.15.0
   firebase_core: ^4.11.0
   firebase_messaging: ^16.4.1
+  # Wybór obrazka profilowego (galeria/aparat).
+  image_picker: ^1.1.2
 
 dev_dependencies:
   flutter_test:
@@ -55,6 +57,7 @@ flutter_launcher_icons:
   image_path: "assets/icon/icon.png"
   android: true
   ios: true
+  remove_alpha_ios: true # App Store nie przyjmuje ikon z kanałem alfa
   web:
     generate: true
     background_color: "#6A57E8"
@@ -75,6 +78,23 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # Fonty marki spakowane OFFLINE (te same rodziny co strona WWW).
+  # Inter/JetBrains Mono/Caveat = pliki wariacyjne (oś wght), Instrument
+  # Serif = statyczny 400. Licencja OFL.
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Variable.ttf
+    - family: Instrument Serif
+      fonts:
+        - asset: assets/fonts/InstrumentSerif-Regular.ttf
+    - family: JetBrains Mono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Variable.ttf
+    - family: Caveat
+      fonts:
+        - asset: assets/fonts/Caveat-Variable.ttf
 
   # To add assets to your application, add an assets section, like this:
   # assets:

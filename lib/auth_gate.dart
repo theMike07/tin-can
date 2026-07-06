@@ -1,9 +1,14 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'logo.dart';
 import 'main.dart';
 import 'push.dart';
+import 'theme.dart';
 
 // Google: wymaga konfiguracji w Google Cloud + Supabase (Client ID/Secret).
 const bool kGoogleReady = true;
@@ -106,103 +111,121 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 360),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text(
-                  '🥫 Tin Can',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _isRegister ? 'Załóż konto' : 'Zaloguj się',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 24),
-                TextField(
-                  controller: _email,
-                  keyboardType: TextInputType.emailAddress,
-                  autofillHints: const [AutofillHints.email],
-                  decoration: const InputDecoration(
-                    labelText: 'E-mail',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.mail_outline),
+      body: PaperBackground(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 384),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 16),
+                  const Center(child: TinCanLogo(width: 128)),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Tin Can',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                          fontSize: 46,
+                          height: 1.0,
+                        ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _password,
-                  obscureText: true,
-                  onSubmitted: (_) => _busy ? null : _submit(),
-                  decoration: const InputDecoration(
-                    labelText: 'Hasło',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.lock_outline),
-                  ),
-                ),
-                if (_error != null) ...[
-                  const SizedBox(height: 12),
-                  Text(_error!, style: const TextStyle(color: Colors.red)),
-                ],
-                if (_info != null) ...[
-                  const SizedBox(height: 12),
-                  Text(_info!, style: const TextStyle(color: Colors.green)),
-                ],
-                const SizedBox(height: 20),
-                FilledButton(
-                  onPressed: _busy ? null : _submit,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: _busy
-                        ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : Text(_isRegister ? 'Zarejestruj się' : 'Zaloguj się'),
-                  ),
-                ),
-                TextButton(
-                  onPressed: _busy
-                      ? null
-                      : () => setState(() {
-                            _isRegister = !_isRegister;
-                            _error = null;
-                            _info = null;
-                          }),
-                  child: Text(_isRegister
-                      ? 'Masz już konto? Zaloguj się'
-                      : 'Nie masz konta? Zarejestruj się'),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: const [
-                    Expanded(child: Divider()),
-                    Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 8),
-                      child: Text('albo'),
+                  const SizedBox(height: 4),
+                  Center(
+                    child: Text(
+                      'dwie puszki, jeden sznurek',
+                      style: handStyle(size: 24),
                     ),
-                    Expanded(child: Divider()),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : _google,
-                  icon: const Icon(Icons.g_mobiledata, size: 28),
-                  label: const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 10),
-                    child: Text('Kontynuuj z Google'),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 26),
+                  GlassCard(
+                    glow: true,
+                    padding: const EdgeInsets.fromLTRB(22, 22, 22, 20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Eyebrow(_isRegister ? 'Nowe konto' : 'Witaj ponownie'),
+                        const SizedBox(height: 16),
+                        TextField(
+                          controller: _email,
+                          keyboardType: TextInputType.emailAddress,
+                          autofillHints: const [AutofillHints.email],
+                          decoration: const InputDecoration(
+                            labelText: 'E-mail',
+                            prefixIcon: Icon(Icons.mail_outline),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _password,
+                          obscureText: true,
+                          onSubmitted: (_) => _busy ? null : _submit(),
+                          decoration: const InputDecoration(
+                            labelText: 'Hasło',
+                            prefixIcon: Icon(Icons.lock_outline),
+                          ),
+                        ),
+                        if (_error != null) ...[
+                          const SizedBox(height: 12),
+                          Text(_error!,
+                              style: const TextStyle(color: TC.coral600)),
+                        ],
+                        if (_info != null) ...[
+                          const SizedBox(height: 12),
+                          Text(_info!,
+                              style: const TextStyle(
+                                  color: Color(0xFF2E9E5B))),
+                        ],
+                        const SizedBox(height: 20),
+                        PrimaryPillButton(
+                          label: _isRegister ? 'Zarejestruj się' : 'Zaloguj się',
+                          busy: _busy,
+                          onPressed: _busy ? null : _submit,
+                        ),
+                        TextButton(
+                          onPressed: _busy
+                              ? null
+                              : () => setState(() {
+                                    _isRegister = !_isRegister;
+                                    _error = null;
+                                    _info = null;
+                                  }),
+                          child: Text(_isRegister
+                              ? 'Masz już konto? Zaloguj się'
+                              : 'Nie masz konta? Zarejestruj się'),
+                        ),
+                        Row(
+                          children: [
+                            Expanded(
+                                child: Divider(
+                                    color: TC.ink.withValues(alpha: 0.12))),
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 10),
+                              child: Text('albo',
+                                  style: TextStyle(
+                                      color: TC.inkSoft, fontSize: 13)),
+                            ),
+                            Expanded(
+                                child: Divider(
+                                    color: TC.ink.withValues(alpha: 0.12))),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: _busy ? null : _google,
+                          icon: const Icon(Icons.g_mobiledata, size: 28),
+                          label: const Text('Kontynuuj z Google'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                ],
+              ),
             ),
           ),
         ),
@@ -217,6 +240,7 @@ class Puszka {
   final String otherId;
   final String otherEmail;
   final String? otherUsername;
+  final String? otherAvatar; // base64 zdjęcia profilowego (opcjonalnie)
   final String status; // 'pending' | 'accepted'
   final bool requestedByMe; // czy JA wysłałem zaproszenie
   Puszka({
@@ -224,6 +248,7 @@ class Puszka {
     required this.otherId,
     required this.otherEmail,
     required this.otherUsername,
+    required this.otherAvatar,
     required this.status,
     required this.requestedByMe,
   });
@@ -246,8 +271,10 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loading = true;
   String? _error;
   String? _myUsername;
+  String? _myAvatar; // base64 mojego zdjęcia profilowego
   List<Puszka> _puszki = [];
   List<Map<String, dynamic>> _groups = []; // #3: grupy (id, name)
+  final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
@@ -264,13 +291,12 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final me = _supabase.auth.currentUser!.id;
 
-      // moja nazwa użytkownika
-      final myProfile = await _supabase
-          .from('profiles')
-          .select('username')
-          .eq('id', me)
-          .maybeSingle();
+      // moja nazwa użytkownika + zdjęcie. select() = wszystkie kolumny, dzięki
+      // czemu brak kolumny avatar_url (przed migracją) NIE wywala ekranu.
+      final myProfile =
+          await _supabase.from('profiles').select().eq('id', me).maybeSingle();
       _myUsername = myProfile?['username'] as String?;
+      _myAvatar = myProfile?['avatar_url'] as String?;
 
       final conns = await _supabase
           .from('connections')
@@ -290,7 +316,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (otherIds.isNotEmpty) {
         final profs = await _supabase
             .from('profiles')
-            .select('id, email, username')
+            .select()
             .inFilter('id', otherIds);
         for (final p in (profs as List)) {
           profById[p['id'] as String] = p as Map<String, dynamic>;
@@ -305,6 +331,7 @@ class _HomeScreenState extends State<HomeScreen> {
           otherId: id,
           otherEmail: (p?['email'] as String?) ?? '—',
           otherUsername: p?['username'] as String?,
+          otherAvatar: p?['avatar_url'] as String?,
           status: (c['status'] as String?) ?? 'accepted',
           requestedByMe: c['requested_by'] == me,
         );
@@ -585,7 +612,15 @@ class _HomeScreenState extends State<HomeScreen> {
     final user = _supabase.auth.currentUser;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Twoje puszki'),
+        titleSpacing: 16,
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const TinCanLogo(width: 30),
+            const SizedBox(width: 10),
+            const Text('Twoje puszki'),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.group_add),
@@ -597,10 +632,32 @@ class _HomeScreenState extends State<HomeScreen> {
             tooltip: 'Odśwież',
             onPressed: _load,
           ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'Wyloguj',
-            onPressed: () => _supabase.auth.signOut(),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.account_circle_outlined),
+            tooltip: 'Konto',
+            onSelected: (v) {
+              if (v == 'logout') _supabase.auth.signOut();
+              if (v == 'delete') _deleteAccount();
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'logout',
+                child: ListTile(
+                  leading: Icon(Icons.logout),
+                  title: Text('Wyloguj'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: 'delete',
+                child: ListTile(
+                  leading: Icon(Icons.delete_forever, color: TC.coral600),
+                  title: Text('Usuń konto',
+                      style: TextStyle(color: TC.coral600)),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -609,44 +666,284 @@ class _HomeScreenState extends State<HomeScreen> {
         icon: const Icon(Icons.add),
         label: const Text('Dodaj'),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text('Błąd ładowania: $_error',
-                        textAlign: TextAlign.center),
-                  ),
-                )
-              : Column(
-                  children: [
-                    Card(
-                      margin: const EdgeInsets.all(12),
-                      child: ListTile(
-                        leading:
-                            const Text('🥫', style: TextStyle(fontSize: 28)),
-                        title: Text(
-                          _myUsername != null && _myUsername!.isNotEmpty
-                              ? '@$_myUsername'
-                              : 'Ustaw nazwę użytkownika',
-                        ),
-                        subtitle: Text(user?.email ?? '—'),
-                        trailing: TextButton.icon(
-                          onPressed: _editUsername,
-                          icon: const Icon(Icons.edit, size: 18),
-                          label: Text(
-                            _myUsername == null || _myUsername!.isEmpty
-                                ? 'Ustaw'
-                                : 'Zmień',
+      body: PaperBackground(
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text('Błąd ładowania: $_error',
+                          textAlign: TextAlign.center),
+                    ),
+                  )
+                : Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 2),
+                        child: GlassCard(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 14),
+                          child: Row(
+                            children: [
+                              GestureDetector(
+                                onTap: _avatarMenu,
+                                child: Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    _profileAvatar(_myAvatar, 48),
+                                    Positioned(
+                                      right: -2,
+                                      bottom: -2,
+                                      child: Container(
+                                        padding: const EdgeInsets.all(4),
+                                        decoration: BoxDecoration(
+                                          color: TC.brand,
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                              color: TC.paper, width: 2),
+                                        ),
+                                        child: const Icon(Icons.photo_camera,
+                                            size: 11, color: Colors.white),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: _editUsername,
+                                  behavior: HitTestBehavior.opaque,
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _myUsername != null &&
+                                                _myUsername!.isNotEmpty
+                                            ? '@$_myUsername'
+                                            : 'Ustaw nazwę użytkownika',
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w700,
+                                          color: TC.ink,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        user?.email ?? '—',
+                                        style: const TextStyle(
+                                            fontSize: 13, color: TC.inkSoft),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                onPressed: _editUsername,
+                                icon: const Icon(Icons.edit,
+                                    size: 18, color: TC.brand),
+                                tooltip: 'Zmień nazwę',
+                              ),
+                            ],
                           ),
                         ),
                       ),
-                    ),
-                    Expanded(child: _buildList()),
-                  ],
-                ),
+                      Expanded(child: _buildList()),
+                    ],
+                  ),
+      ),
     );
+  }
+
+  // Kwadratowy awatar z zaokrągleniem — spójny leading dla pozycji list.
+  Widget _avatarBox(Color bg, Widget child) => Container(
+        width: 44,
+        height: 44,
+        decoration:
+            BoxDecoration(color: bg, borderRadius: BorderRadius.circular(13)),
+        alignment: Alignment.center,
+        child: child,
+      );
+
+  String _initial(String label) {
+    final s = label.replaceAll('@', '').trim();
+    return s.isEmpty ? '?' : s.substring(0, 1).toUpperCase();
+  }
+
+  // Dekoduje base64 na widżet obrazka; null/uszkodzone -> fallback.
+  Widget? _decodedImage(String? b64, double size, double radius) {
+    if (b64 == null || b64.isEmpty) return null;
+    try {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: Image.memory(
+          base64Decode(b64),
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Moje kółko profilowe: zdjęcie albo brandowy placeholder z logo.
+  Widget _profileAvatar(String? b64, double size) {
+    return _decodedImage(b64, size, size) ??
+        Container(
+          width: size,
+          height: size,
+          decoration:
+              const BoxDecoration(color: TC.brand100, shape: BoxShape.circle),
+          alignment: Alignment.center,
+          child: TinCanLogo(width: size * 0.62),
+        );
+  }
+
+  // Leading znajomego: zdjęcie albo inicjał na brandowym tle.
+  Widget _friendLeading(String? b64, String label) {
+    return _decodedImage(b64, 44, 13) ??
+        _avatarBox(
+          TC.brand100,
+          Text(_initial(label),
+              style: const TextStyle(
+                  color: TC.brand700,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 18)),
+        );
+  }
+
+  // Menu zdjęcia profilowego: wybierz / usuń.
+  Future<void> _avatarMenu() async {
+    final has = _myAvatar != null && _myAvatar!.isNotEmpty;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Wybierz zdjęcie'),
+              onTap: () => Navigator.pop(ctx, 'pick'),
+            ),
+            if (has)
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: TC.coral600),
+                title: const Text('Usuń zdjęcie'),
+                onTap: () => Navigator.pop(ctx, 'remove'),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (action == 'pick') await _pickAvatar();
+    if (action == 'remove') await _saveAvatar(null);
+  }
+
+  // Wybór z galerii -> skalowanie 256px + kompresja -> base64 -> zapis.
+  Future<void> _pickAvatar() async {
+    try {
+      final XFile? file = await _picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 256,
+        maxHeight: 256,
+        imageQuality: 72,
+      );
+      if (file == null) return;
+      final bytes = await file.readAsBytes();
+      if (bytes.lengthInBytes > 400 * 1024) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Zdjęcie za duże — wybierz mniejsze.')));
+        }
+        return;
+      }
+      await _saveAvatar(base64Encode(bytes));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Nie udało się: $e')));
+      }
+    }
+  }
+
+  // Zapis (lub usunięcie, gdy null) zdjęcia przez RPC set_avatar.
+  Future<void> _saveAvatar(String? b64) async {
+    try {
+      final res = await _supabase.rpc('set_avatar', params: {'p_url': b64});
+      final status = res as String?;
+      if (status != null && status != 'ok') {
+        final msg = switch (status) {
+          'too_large' => 'Zdjęcie za duże — wybierz mniejsze.',
+          'not_authenticated' => 'Najpierw się zaloguj.',
+          _ => 'Nie udało się ($status).',
+        };
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(msg)));
+        }
+        return;
+      }
+      if (mounted) {
+        setState(() => _myAvatar = b64);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(b64 == null
+                ? 'Zdjęcie usunięte'
+                : 'Zdjęcie profilowe zapisane ✨')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Błąd zapisu: $e')));
+      }
+    }
+  }
+
+  // Usunięcie konta (wymóg sklepów). Nieodwracalne: RPC kasuje dane + auth.
+  Future<void> _deleteAccount() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Usunąć konto?'),
+        content: const Text(
+          'Tej operacji NIE DA SIĘ cofnąć.\n\n'
+          'Usuniemy Twoje konto, nazwę, zdjęcie, znajomych i wszystkie '
+          'rysunki — wysłane i odebrane.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Anuluj'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: TC.coral600),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Usuń na zawsze'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await _supabase.rpc('delete_account');
+      // Konto auth już nie istnieje — czyścimy lokalną sesję (AuthGate wróci
+      // na ekran logowania). signOut może rzucić przy nieważnym tokenie.
+      try {
+        await _supabase.auth.signOut();
+      } catch (_) {}
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Nie udało się usunąć konta: $e')),
+        );
+      }
+    }
   }
 
   Widget _buildList() {
@@ -659,57 +956,73 @@ class _HomeScreenState extends State<HomeScreen> {
         .toList();
 
     if (_puszki.isEmpty && _groups.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-            'Brak puszek.\nDodaj kogoś (➕) po nazwie lub e-mailu. 🥫',
-            textAlign: TextAlign.center,
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const TinCanLogo(width: 96),
+              const SizedBox(height: 18),
+              Text(
+                'Tu nie ma jeszcze puszek',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Dodaj kogoś (➕) po nazwie lub e-mailu\ni pociągnijcie razem za sznurek.',
+                textAlign: TextAlign.center,
+                style: handStyle(size: 22),
+              ),
+            ],
           ),
         ),
       );
     }
 
     return ListView(
+      padding: const EdgeInsets.only(bottom: 96),
       children: [
         if (incoming.isNotEmpty) ...[
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Text('📨 Zaproszenia',
-                style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
+          _sectionHeader('Zaproszenia'),
           ...incoming.map((p) => ListTile(
-                leading: const Text('📨', style: TextStyle(fontSize: 26)),
-                title: Text(p.label),
+                leading: _avatarBox(
+                  TC.coral.withValues(alpha: 0.14),
+                  const Icon(Icons.mark_email_unread_outlined,
+                      color: TC.coral600, size: 22),
+                ),
+                title: Text(p.label,
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
                 subtitle: const Text('chce się z Tobą połączyć'),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
-                      icon: const Icon(Icons.check_circle, color: Colors.green),
+                      icon: const Icon(Icons.check_circle,
+                          color: Color(0xFF2E9E5B)),
                       tooltip: 'Akceptuj',
                       onPressed: () => _respond(p.connectionId, true),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.cancel, color: Colors.red),
+                      icon: const Icon(Icons.cancel, color: TC.coral600),
                       tooltip: 'Odrzuć',
                       onPressed: () => _respond(p.connectionId, false),
                     ),
                   ],
                 ),
               )),
-          const Divider(),
         ],
         if (_groups.isNotEmpty) ...[
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Text('👥 Grupy',
-                style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
+          _sectionHeader('Grupy'),
           ..._groups.map((g) => ListTile(
-                leading: const Text('👥', style: TextStyle(fontSize: 26)),
-                title: Text(g['name'] as String? ?? 'Grupa'),
-                trailing: const Icon(Icons.chevron_right),
+                leading: _avatarBox(
+                  TC.brand.withValues(alpha: 0.12),
+                  const Icon(Icons.group_outlined, color: TC.brand, size: 22),
+                ),
+                title: Text(g['name'] as String? ?? 'Grupa',
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+                trailing: const Icon(Icons.chevron_right, color: TC.inkSoft),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => DrawingScreen(
@@ -719,16 +1032,18 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               )),
-          const Divider(),
         ],
+        if (accepted.isNotEmpty) _sectionHeader('Puszki'),
         ...accepted.map((p) {
           final hasName =
               p.otherUsername != null && p.otherUsername!.isNotEmpty;
           return ListTile(
-            leading: const Text('🥫', style: TextStyle(fontSize: 28)),
-            title: Text(p.label),
+            leading: _friendLeading(p.otherAvatar, p.label),
+            title: Text(p.label,
+                style: const TextStyle(fontWeight: FontWeight.w600)),
             subtitle: hasName ? Text(p.otherEmail) : null,
             trailing: PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert, color: TC.inkSoft),
               onSelected: (v) {
                 if (v == 'remove') _removeFriend(p.connectionId, p.label);
               },
@@ -748,12 +1063,17 @@ class _HomeScreenState extends State<HomeScreen> {
             },
           );
         }),
+        if (outgoing.isNotEmpty) _sectionHeader('Wysłane'),
         ...outgoing.map((p) => ListTile(
-              leading: const Text('⏳', style: TextStyle(fontSize: 24)),
-              title: Text(p.label),
+              leading: _avatarBox(
+                const Color(0x1FE0932F),
+                const Icon(Icons.schedule, color: Color(0xFFCC8A2E), size: 22),
+              ),
+              title: Text(p.label,
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
               subtitle: const Text('wysłano — oczekuje na akceptację'),
               trailing: IconButton(
-                icon: const Icon(Icons.close),
+                icon: const Icon(Icons.close, color: TC.inkSoft),
                 tooltip: 'Anuluj zaproszenie',
                 onPressed: () => _doRemove(p.connectionId),
               ),
@@ -761,4 +1081,9 @@ class _HomeScreenState extends State<HomeScreen> {
       ],
     );
   }
+
+  Widget _sectionHeader(String text) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 18, 16, 8),
+        child: Eyebrow(text),
+      );
 }
