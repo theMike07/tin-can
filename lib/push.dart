@@ -1,9 +1,33 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 // Powiadomienia push (FCM) — tylko na mobile. Na web pomijamy (inny mechanizm).
+
+// Czyszczenie powiadomień z paska systemowego (po wejściu/wznowieniu apki).
+final _localNotifications = FlutterLocalNotificationsPlugin();
+bool _localNotifInited = false;
+
+Future<void> clearDeliveredNotifications() async {
+  if (kIsWeb) return;
+  try {
+    if (!_localNotifInited) {
+      await _localNotifications.initialize(
+        const InitializationSettings(
+          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+          iOS: DarwinInitializationSettings(),
+        ),
+      );
+      _localNotifInited = true;
+    }
+    // Kasuje wszystkie powiadomienia apki (także te pokazane przez FCM w tle).
+    await _localNotifications.cancelAll();
+  } catch (e) {
+    debugPrint('CLEAR_NOTIF_ERROR: $e');
+  }
+}
 
 Future<void> initFirebaseIfMobile() async {
   if (kIsWeb) return;

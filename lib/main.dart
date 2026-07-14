@@ -17,8 +17,35 @@ void main() async {
   runApp(const TinCanApp());
 }
 
-class TinCanApp extends StatelessWidget {
+class TinCanApp extends StatefulWidget {
   const TinCanApp({super.key});
+
+  @override
+  State<TinCanApp> createState() => _TinCanAppState();
+}
+
+class _TinCanAppState extends State<TinCanApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // 4: po uruchomieniu apki wyczyść powiadomienia z paska systemowego.
+    clearDeliveredNotifications();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 4: po powrocie do apki (wznowienie z tła) też czyścimy powiadomienia.
+    if (state == AppLifecycleState.resumed) {
+      clearDeliveredNotifications();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -78,20 +105,24 @@ class Stroke {
 
 // Jeden rysunek w historii — wysłany albo odebrany.
 class ReceivedDrawing {
+  final String? id; // id wiersza w bazie (do oznaczania odczytu)
   final String sender;
   final String recipient;
   final bool outgoing; // true = ja wysłałem; false = przyszło do mnie
   final String other; // druga strona (do kogo / od kogo)
   final DateTime createdAt;
   final List<Stroke> strokes;
+  DateTime? readAt; // kiedy odbiorca przeczytał (mutowalne — aktualizacja realtime)
 
   ReceivedDrawing({
+    this.id,
     required this.sender,
     required this.recipient,
     required this.outgoing,
     required this.other,
     required this.createdAt,
     required this.strokes,
+    this.readAt,
   });
 
   // Buduje z wiersza bazy / payloadu realtime; myId ustala kierunek (od/do).
@@ -103,6 +134,7 @@ class ReceivedDrawing {
         .map((e) => Stroke.fromJson(e as Map<String, dynamic>))
         .toList();
     return ReceivedDrawing(
+      id: row['id'] as String?,
       sender: sender,
       recipient: recipient,
       outgoing: outgoing,
@@ -111,6 +143,7 @@ class ReceivedDrawing {
           DateTime.tryParse(row['created_at']?.toString() ?? '')?.toLocal() ??
               DateTime.now(),
       strokes: strokes,
+      readAt: DateTime.tryParse(row['read_at']?.toString() ?? '')?.toLocal(),
     );
   }
 }
@@ -166,6 +199,11 @@ class _DrawingScreenState extends State<DrawingScreen>
   // #4: MÓJ rysunek odłożony "do kieszeni", gdy przyszedł cudzy w trakcie rysowania.
   List<Stroke>? _stashedMine;
 
+  // Cofnij/ponów — stos zdjętych kresek (każda kreska = od dotknięcia do puszczenia).
+  final List<Stroke> _redo = [];
+  bool get _canUndo => _drawingMine && _strokes.isNotEmpty;
+  bool get _canRedo => _drawingMine && _redo.isNotEmpty;
+
   // Nasłuch realtime na rysunki przychodzące do nas.
   RealtimeChannel? _channel;
   // Animacja "materializacji" — odebrany rysunek odtwarza się kreska po kresce.
@@ -217,6 +255,19 @@ class _DrawingScreenState extends State<DrawingScreen>
           ),
           callback: _onIncoming,
         )
+        // Potwierdzenia odczytu: gdy odbiorca przeczyta MÓJ rysunek,
+        // przychodzi UPDATE (read_at) na wierszu, gdzie sender == ja.
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'drawings',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'sender',
+            value: myId,
+          ),
+          callback: _onReadReceipt,
+        )
         .subscribe((status, [error]) {
           debugPrint('TINCAN_SUB: $status ${error ?? ''}');
         });
@@ -225,9 +276,9 @@ class _DrawingScreenState extends State<DrawingScreen>
   // Wczytanie historii odebranych rysunków z bazy (najnowsze pierwsze).
   Future<void> _loadHistory() async {
     try {
-      final base = supabase
-          .from('drawings')
-          .select('sender, recipient, created_at, strokes');
+      // select() = wszystkie kolumny; dzięki temu brak kolumny read_at (przed
+      // uruchomieniem read_receipts.sql) NIE wywala ładowania historii.
+      final base = supabase.from('drawings').select();
       final rows = widget.isGroup
           ? await base
               .eq('group_id', widget.groupId!)
@@ -247,15 +298,13 @@ class _DrawingScreenState extends State<DrawingScreen>
           _history
             ..clear()
             ..addAll(items);
-          // #5: jeśli ostatni rysunek w wątku jest OD peera — pokaż go od razu
-          // na płótnie (nie tylko w historii). Bez animacji (to nie "na żywo").
-          if (items.isNotEmpty && !items.first.outgoing) {
-            _strokes
-              ..clear()
-              ..addAll(items.first.strokes);
-            _drawingMine = false;
-          }
         });
+        // 1: jeśli ostatni rysunek w wątku jest OD peera — odtwórz go z
+        // animacją (jak „na żywo"), zamiast pokazywać od razu w całości.
+        if (items.isNotEmpty && !items.first.outgoing) {
+          _materialize(items.first.strokes);
+          _markRead(items.first); // 3: wejście w czat = przeczytanie
+        }
       }
     } catch (e) {
       debugPrint('TINCAN_HISTORY_ERROR: $e');
@@ -287,9 +336,33 @@ class _DrawingScreenState extends State<DrawingScreen>
       _stashedMine = List<Stroke>.from(_strokes);
     }
     _materialize(received.strokes);
+    _markRead(received); // 3: właśnie go widzę → oznacz jako przeczytany
 
     // Miły "ding" — sygnał, że coś przyszło (Web Audio na web; na mobile cisza).
     playChime();
+  }
+
+  // 3: oznacz odebrany rysunek jako przeczytany (raz, tylko dla odebranych).
+  Future<void> _markRead(ReceivedDrawing d) async {
+    if (d.outgoing || d.id == null || d.readAt != null) return;
+    d.readAt = DateTime.now(); // lokalnie od razu (unikamy podwójnego wywołania)
+    try {
+      await supabase.rpc('mark_read', params: {'p_id': d.id});
+    } catch (e) {
+      debugPrint('TINCAN_MARK_READ_ERROR: $e');
+    }
+  }
+
+  // 3: nadawca dostaje potwierdzenie odczytu (UPDATE read_at na jego rysunku).
+  void _onReadReceipt(PostgresChangePayload payload) {
+    final rec = payload.newRecord;
+    final id = rec['id'] as String?;
+    final readAt = DateTime.tryParse(rec['read_at']?.toString() ?? '')?.toLocal();
+    if (id == null || readAt == null) return;
+    final idx = _history.indexWhere((d) => d.id == id);
+    if (idx >= 0 && _history[idx].readAt == null) {
+      setState(() => _history[idx].readAt = readAt);
+    }
   }
 
   // Wrzuca dany rysunek na płótno i odpala animację materializacji.
@@ -301,6 +374,7 @@ class _DrawingScreenState extends State<DrawingScreen>
       _currentStroke = null;
       _materializing = true;
       _drawingMine = false; // płótno pokazuje teraz cudzy rysunek
+      _redo.clear();
     });
     // Czas odrysowywania ustawia odbiorca (suwak ⏱ w pasku u góry).
     _revealController
@@ -321,6 +395,7 @@ class _DrawingScreenState extends State<DrawingScreen>
       _currentStroke = null;
       _drawingMine = true;
       _stashedMine = null;
+      _redo.clear();
     });
   }
 
@@ -363,8 +438,21 @@ class _DrawingScreenState extends State<DrawingScreen>
       if (_currentStroke != null) {
         _strokes.add(_currentStroke!);
         _currentStroke = null;
+        _redo.clear(); // nowa kreska kasuje możliwość „ponów"
       }
     });
+  }
+
+  // Cofnij ostatnią kreskę (na stos redo).
+  void _undo() {
+    if (!_canUndo) return;
+    setState(() => _redo.add(_strokes.removeLast()));
+  }
+
+  // Ponów cofniętą kreskę.
+  void _redoStroke() {
+    if (!_canRedo) return;
+    setState(() => _strokes.add(_redo.removeLast()));
   }
 
   void _clear() {
@@ -375,6 +463,7 @@ class _DrawingScreenState extends State<DrawingScreen>
       _currentStroke = null;
       _drawingMine = false;
       _stashedMine = null;
+      _redo.clear();
     });
   }
 
@@ -384,23 +473,31 @@ class _DrawingScreenState extends State<DrawingScreen>
     final snapshot = List<Stroke>.from(_strokes);
     final strokesJson = snapshot.map((s) => s.toJson()).toList();
     try {
+      String? newId;
       if (widget.isGroup) {
         await supabase.rpc('send_group_drawing', params: {
           'p_group_id': widget.groupId,
           'p_strokes': strokesJson,
         });
       } else {
-        await supabase.from('drawings').insert({
-          'sender': myId,
-          'recipient': widget.peerId,
-          'strokes': strokesJson,
-        });
+        // .select() zwraca wstawiony wiersz — bierzemy id do śledzenia odczytu.
+        final inserted = await supabase
+            .from('drawings')
+            .insert({
+              'sender': myId,
+              'recipient': widget.peerId,
+              'strokes': strokesJson,
+            })
+            .select('id')
+            .single();
+        newId = inserted['id'] as String?;
       }
       // Do lokalnej historii (natychmiastowy podgląd; reload i tak dociągnie).
       setState(() {
         _history.insert(
           0,
           ReceivedDrawing(
+            id: newId,
             sender: myId,
             recipient: widget.peerId ?? myId,
             outgoing: true,
@@ -672,32 +769,57 @@ class _DrawingScreenState extends State<DrawingScreen>
         top: false,
         child: SizedBox(
           height: 62,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: [
-                for (final c in _palette) _colorSwatch(c),
-                Container(
-                  width: 1,
-                  height: 28,
-                  margin: const EdgeInsets.symmetric(horizontal: 10),
-                  color: TC.ink.withValues(alpha: 0.14),
-                ),
-                for (final w in _brushWidths) _widthDot(w),
-                const SizedBox(width: 4),
-                IconButton(
-                  onPressed: () => setState(() => _eraser = !_eraser),
-                  icon: const Icon(Icons.auto_fix_high),
-                  tooltip: 'Gumka',
-                  style: IconButton.styleFrom(
-                    backgroundColor:
-                        _eraser ? TC.brand.withValues(alpha: 0.15) : null,
-                    foregroundColor: _eraser ? TC.brand : TC.inkSoft,
+          child: Row(
+            children: [
+              const SizedBox(width: 4),
+              IconButton(
+                onPressed: _canUndo ? _undo : null,
+                icon: const Icon(Icons.undo),
+                tooltip: 'Cofnij',
+                color: TC.inkSoft,
+              ),
+              IconButton(
+                onPressed: _canRedo ? _redoStroke : null,
+                icon: const Icon(Icons.redo),
+                tooltip: 'Ponów',
+                color: TC.inkSoft,
+              ),
+              Container(
+                width: 1,
+                height: 28,
+                margin: const EdgeInsets.symmetric(horizontal: 6),
+                color: TC.ink.withValues(alpha: 0.14),
+              ),
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Row(
+                    children: [
+                      for (final c in _palette) _colorSwatch(c),
+                      Container(
+                        width: 1,
+                        height: 28,
+                        margin: const EdgeInsets.symmetric(horizontal: 10),
+                        color: TC.ink.withValues(alpha: 0.14),
+                      ),
+                      for (final w in _brushWidths) _widthDot(w),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        onPressed: () => setState(() => _eraser = !_eraser),
+                        icon: const Icon(Icons.auto_fix_high),
+                        tooltip: 'Gumka',
+                        style: IconButton.styleFrom(
+                          backgroundColor:
+                              _eraser ? TC.brand.withValues(alpha: 0.15) : null,
+                          foregroundColor: _eraser ? TC.brand : TC.inkSoft,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
@@ -864,6 +986,9 @@ class GalleryScreen extends StatelessWidget {
     return '${d.inDays} dni temu';
   }
 
+  String _hhmm(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -934,11 +1059,33 @@ class GalleryScreen extends StatelessWidget {
                                           fontWeight: FontWeight.w600),
                                     ),
                                   ),
-                                  Text(
-                                    _ago(d.createdAt),
-                                    style: const TextStyle(
-                                        fontSize: 11, color: TC.inkSoft),
-                                  ),
+                                  if (d.outgoing) ...[
+                                    Icon(
+                                      d.readAt != null
+                                          ? Icons.done_all
+                                          : Icons.done,
+                                      size: 15,
+                                      color: d.readAt != null
+                                          ? TC.brand
+                                          : TC.inkSoft,
+                                    ),
+                                    const SizedBox(width: 3),
+                                    Text(
+                                      d.readAt != null
+                                          ? _hhmm(d.readAt!)
+                                          : _ago(d.createdAt),
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          color: d.readAt != null
+                                              ? TC.brand
+                                              : TC.inkSoft),
+                                    ),
+                                  ] else
+                                    Text(
+                                      _ago(d.createdAt),
+                                      style: const TextStyle(
+                                          fontSize: 11, color: TC.inkSoft),
+                                    ),
                                 ],
                               ),
                             ),

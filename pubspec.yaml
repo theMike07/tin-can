@@ -39,6 +39,8 @@ dependencies:
   firebase_messaging: ^16.4.1
   # Wybór obrazka profilowego (galeria/aparat).
   image_picker: ^1.1.2
+  # Czyszczenie powiadomień z paska po wejściu do apki (cancelAll).
+  flutter_local_notifications: ^18.0.1
 
 dev_dependencies:
   flutter_test:
