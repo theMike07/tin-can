@@ -406,7 +406,7 @@ class _DrawingScreenState extends State<DrawingScreen>
           final username = p['username'] as String?;
           final email = p['email'] as String?;
           map[p['id'] as String] = (username != null && username.isNotEmpty)
-              ? '@$username'
+              ? username
               : (email ?? '?');
         }
       } catch (e) {
@@ -1288,8 +1288,9 @@ class GalleryScreen extends StatelessWidget {
                                           ? Icons.done_all
                                           : Icons.done,
                                       size: 15,
+                                      // ✓✓ odczytane = wyraźny fiolet
                                       color: d.readAt != null
-                                          ? TC.brand
+                                          ? const Color(0xFF7C4DFF)
                                           : TC.inkSoft,
                                     ),
                                     const SizedBox(width: 3),
@@ -1300,7 +1301,7 @@ class GalleryScreen extends StatelessWidget {
                                       style: TextStyle(
                                           fontSize: 11,
                                           color: d.readAt != null
-                                              ? TC.brand
+                                              ? const Color(0xFF7C4DFF)
                                               : TC.inkSoft),
                                     ),
                                   ] else

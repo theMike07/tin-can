@@ -256,7 +256,7 @@ class Puszka {
 
   // Tytuł puszki: @nazwa jeśli jest, inaczej e-mail.
   String get label => (otherUsername != null && otherUsername!.isNotEmpty)
-      ? '@$otherUsername'
+      ? otherUsername!
       : otherEmail;
 }
 
@@ -371,7 +371,6 @@ class _HomeScreenState extends State<HomeScreen> {
           autofocus: true,
           decoration: const InputDecoration(
             labelText: 'Nazwa (3–20: litery, cyfry, _)',
-            prefixText: '@',
             border: OutlineInputBorder(),
           ),
           onSubmitted: (v) => Navigator.of(ctx).pop(v),
@@ -394,7 +393,7 @@ class _HomeScreenState extends State<HomeScreen> {
           .rpc('set_username', params: {'new_username': value.trim()});
       final status = res as String?;
       final msg = switch (status) {
-        'ok' => 'Nazwa ustawiona: @${value.trim()}',
+        'ok' => 'Nazwa ustawiona: ${value.trim()}',
         'taken' => 'Ta nazwa jest już zajęta.',
         'invalid' => 'Niedozwolona nazwa (3–20 znaków: litery, cyfry, _).',
         _ => 'Nie udało się ($status).',
@@ -735,7 +734,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       Text(
                                         _myUsername != null &&
                                                 _myUsername!.isNotEmpty
-                                            ? '@$_myUsername'
+                                            ? _myUsername!
                                             : 'Ustaw nazwę użytkownika',
                                         style: const TextStyle(
                                           fontSize: 16,
