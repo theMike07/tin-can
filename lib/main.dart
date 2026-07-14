@@ -171,6 +171,11 @@ class ReceivedDrawing {
   final List<Stroke> strokes;
   DateTime? readAt; // kiedy odbiorca przeczytał (mutowalne — aktualizacja realtime)
   DateTime? likedAt; // kiedy odbiorca polubił (mutowalne)
+  String? otherLabel; // ładna nazwa drugiej strony (@nazwa/e-mail) do historii
+
+  // Do wyświetlenia: nazwa zamiast surowego id. Fallback = id.
+  String get otherDisplay =>
+      (otherLabel != null && otherLabel!.isNotEmpty) ? otherLabel! : other;
 
   ReceivedDrawing({
     this.id,
@@ -358,6 +363,7 @@ class _DrawingScreenState extends State<DrawingScreen>
       final items = (rows as List)
           .map((r) => ReceivedDrawing.fromRow(r as Map<String, dynamic>, myId))
           .toList();
+      await _labelHistory(items);
       if (mounted) {
         setState(() {
           _history
@@ -378,6 +384,41 @@ class _DrawingScreenState extends State<DrawingScreen>
     }
   }
 
+  // Uzupełnia ładne nazwy „od/do" w historii: 1:1 = peer; grupa = nadawcy.
+  Future<void> _labelHistory(List<ReceivedDrawing> items) async {
+    if (items.isEmpty) return;
+    if (!widget.isGroup) {
+      for (final it in items) {
+        it.otherLabel = widget.peerLabel;
+      }
+      return;
+    }
+    final ids =
+        items.where((e) => !e.outgoing).map((e) => e.sender).toSet().toList();
+    final map = <String, String>{};
+    if (ids.isNotEmpty) {
+      try {
+        final profs = await supabase
+            .from('profiles')
+            .select('id, username, email')
+            .inFilter('id', ids);
+        for (final p in (profs as List)) {
+          final username = p['username'] as String?;
+          final email = p['email'] as String?;
+          map[p['id'] as String] = (username != null && username.isNotEmpty)
+              ? '@$username'
+              : (email ?? '?');
+        }
+      } catch (e) {
+        debugPrint('TINCAN_LABEL_ERROR: $e');
+      }
+    }
+    for (final it in items) {
+      it.otherLabel =
+          it.outgoing ? widget.peerLabel : (map[it.sender] ?? it.other);
+    }
+  }
+
   void _onIncoming(PostgresChangePayload payload) {
     final rec = payload.newRecord;
     if (widget.isGroup) {
@@ -392,6 +433,15 @@ class _DrawingScreenState extends State<DrawingScreen>
       myId,
     );
     debugPrint('TINCAN_RX: odebrano ${received.strokes.length} kresek od ${received.sender}');
+
+    // Ładna nazwa „od kogo" w historii (1:1 od ręki; grupa — dociągnij).
+    if (!widget.isGroup) {
+      received.otherLabel = widget.peerLabel;
+    } else {
+      _labelHistory([received]).then((_) {
+        if (mounted) setState(() {});
+      });
+    }
 
     setState(() => _history.insert(0, received));
 
@@ -599,7 +649,7 @@ class _DrawingScreenState extends State<DrawingScreen>
             other: widget.peerId ?? '',
             createdAt: DateTime.now(),
             strokes: snapshot,
-          ),
+          )..otherLabel = widget.peerLabel,
         );
       });
       _clear();
@@ -1140,9 +1190,9 @@ class GalleryScreen extends StatelessWidget {
 
   String _ago(DateTime t) {
     final d = DateTime.now().difference(t);
-    if (d.inMinutes < 1) return 'przed chwilą';
+    if (d.inMinutes < 1) return 'teraz';
     if (d.inMinutes < 60) return '${d.inMinutes} min temu';
-    if (d.inHours < 24) return '${d.inHours} godz. temu';
+    if (d.inHours < 24) return '${d.inHours} h temu';
     return '${d.inDays} dni temu';
   }
 
@@ -1225,8 +1275,8 @@ class GalleryScreen extends StatelessWidget {
                                   Expanded(
                                     child: Text(
                                       d.outgoing
-                                          ? 'do ${d.other}'
-                                          : 'od ${d.other}',
+                                          ? 'do ${d.otherDisplay}'
+                                          : 'od ${d.otherDisplay}',
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
                                           fontWeight: FontWeight.w600),
