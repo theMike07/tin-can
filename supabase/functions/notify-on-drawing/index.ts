@@ -1,5 +1,11 @@
-// Supabase Edge Function: gdy wpadnie nowy rysunek (webhook INSERT na tabeli
-// drawings), wysyła powiadomienie push (FCM) na urządzenia odbiorcy.
+// Supabase Edge Function: powiadomienia push (FCM) dla Tin Can.
+// - webhook INSERT na tabeli drawings  -> "przysłał(a) Ci rysunek" do ODBIORCY
+// - webhook UPDATE na tabeli drawings  -> gdy liked_at zmienia się z null na
+//   wartość: "polubił(a) Twój rysunek" do NADAWCY. Inne UPDATE (np. read_at)
+//   są ignorowane.
+//
+// Payload zawiera też `data.kind` (drawing|like) — apka używa go w tle
+// (onBackgroundMessage) m.in. do odświeżenia widżetu ekranu głównego.
 //
 // Sekrety: FCM_SERVICE_ACCOUNT = cała zawartość klucza serwisowego Firebase (JSON).
 // SUPABASE_URL i SUPABASE_SERVICE_ROLE_KEY są dostępne automatycznie.
@@ -37,71 +43,114 @@ async function getAccessToken(sa: any): Promise<string> {
   return data.access_token;
 }
 
+// Ładna nazwa użytkownika: @nazwa albo e-mail.
+async function displayName(supabase: any, userId: string | undefined) {
+  if (!userId) return "ktoś";
+  const { data: prof } = await supabase
+    .from("profiles")
+    .select("username, email")
+    .eq("id", userId)
+    .maybeSingle();
+  if (prof?.username) return "@" + prof.username;
+  if (prof?.email) return prof.email as string;
+  return "ktoś";
+}
+
+// Wysyła push na wszystkie urządzenia użytkownika. Zwraca statusy HTTP.
+async function pushToUser(
+  supabase: any,
+  userId: string,
+  title: string,
+  body: string,
+  data: Record<string, string>,
+): Promise<number[]> {
+  const { data: tokens } = await supabase
+    .from("device_tokens")
+    .select("token")
+    .eq("user_id", userId);
+  if (!tokens || tokens.length === 0) return [];
+
+  const sa = JSON.parse(Deno.env.get("FCM_SERVICE_ACCOUNT")!);
+  const accessToken = await getAccessToken(sa);
+  const url =
+    `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`;
+
+  const results: number[] = [];
+  for (const t of tokens) {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: {
+          token: t.token,
+          notification: { title, body },
+          data,
+          android: { priority: "HIGH" },
+        },
+      }),
+    });
+    results.push(r.status);
+  }
+  return results;
+}
+
 Deno.serve(async (req) => {
   try {
     const payload = await req.json();
+    const type = (payload.type as string | undefined) ?? "INSERT";
     const record = payload.record ?? payload;
+    const oldRecord = payload.old_record ?? {};
     const recipient = record?.recipient as string | undefined;
     const sender = record?.sender as string | undefined;
-    if (!recipient) return new Response("no recipient", { status: 200 });
-    // #3 grupy: nie wysyłaj push do samego siebie (self-kopia nadawcy).
-    if (sender && sender === recipient) {
-      return new Response("self", { status: 200 });
-    }
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
 
-    // tokeny urządzeń odbiorcy
-    const { data: tokens } = await supabase
-      .from("device_tokens")
-      .select("token")
-      .eq("user_id", recipient);
-    if (!tokens || tokens.length === 0) {
-      return new Response("no tokens", { status: 200 });
-    }
+    if (type === "UPDATE") {
+      // Lajk: liked_at przeszło z null na wartość. (read_at itp. ignorujemy;
+      // odlubienie — też cisza.)
+      const wasLiked = oldRecord?.liked_at != null;
+      const isLiked = record?.liked_at != null;
+      if (wasLiked || !isLiked) return new Response("ignore", { status: 200 });
+      if (!sender) return new Response("no sender", { status: 200 });
+      // self-kopia w grupach: nie powiadamiaj samego siebie
+      if (sender === recipient) return new Response("self", { status: 200 });
 
-    // ładna nazwa nadawcy
-    let from = "ktoś";
-    if (sender) {
-      const { data: prof } = await supabase
-        .from("profiles")
-        .select("username, email")
-        .eq("id", sender)
-        .maybeSingle();
-      if (prof?.username) from = "@" + prof.username;
-      else if (prof?.email) from = prof.email;
-    }
-
-    const sa = JSON.parse(Deno.env.get("FCM_SERVICE_ACCOUNT")!);
-    const accessToken = await getAccessToken(sa);
-    const url =
-      `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`;
-
-    const results: number[] = [];
-    for (const t of tokens) {
-      const r = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          message: {
-            token: t.token,
-            notification: {
-              title: "Tin Can 🥫",
-              body: `${from} przysłał(a) Ci rysunek`,
-            },
-            android: { priority: "HIGH" },
-          },
-        }),
+      const who = await displayName(supabase, recipient); // lajkuje odbiorca
+      const sent = await pushToUser(
+        supabase,
+        sender,
+        "Tin Can ❤️",
+        `${who} polubił(a) Twój rysunek`,
+        { kind: "like" },
+      );
+      return new Response(JSON.stringify({ like: sent }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
       });
-      results.push(r.status);
     }
-    return new Response(JSON.stringify({ sent: results }), {
+
+    // INSERT — nowy rysunek dla odbiorcy.
+    if (!recipient) return new Response("no recipient", { status: 200 });
+    // #3 grupy: nie wysyłaj push do samego siebie (self-kopia nadawcy).
+    if (sender && sender === recipient) {
+      return new Response("self", { status: 200 });
+    }
+
+    const from = await displayName(supabase, sender);
+    const sent = await pushToUser(
+      supabase,
+      recipient,
+      "Tin Can 🥫",
+      `${from} przysłał(a) Ci rysunek`,
+      { kind: "drawing" },
+    );
+    return new Response(JSON.stringify({ sent }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
