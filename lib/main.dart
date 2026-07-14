@@ -113,6 +113,7 @@ class ReceivedDrawing {
   final DateTime createdAt;
   final List<Stroke> strokes;
   DateTime? readAt; // kiedy odbiorca przeczytał (mutowalne — aktualizacja realtime)
+  DateTime? likedAt; // kiedy odbiorca polubił (mutowalne)
 
   ReceivedDrawing({
     this.id,
@@ -123,6 +124,7 @@ class ReceivedDrawing {
     required this.createdAt,
     required this.strokes,
     this.readAt,
+    this.likedAt,
   });
 
   // Buduje z wiersza bazy / payloadu realtime; myId ustala kierunek (od/do).
@@ -144,6 +146,7 @@ class ReceivedDrawing {
               DateTime.now(),
       strokes: strokes,
       readAt: DateTime.tryParse(row['read_at']?.toString() ?? '')?.toLocal(),
+      likedAt: DateTime.tryParse(row['liked_at']?.toString() ?? '')?.toLocal(),
     );
   }
 }
@@ -204,6 +207,11 @@ class _DrawingScreenState extends State<DrawingScreen>
   bool get _canUndo => _drawingMine && _strokes.isNotEmpty;
   bool get _canRedo => _drawingMine && _redo.isNotEmpty;
 
+  // #5 lajki: rysunek OD kogoś aktualnie na płótnie (można go polubić dwuklikiem).
+  ReceivedDrawing? _shownReceived;
+  bool _heartBurst = false; // animacja serca przy polubieniu
+  int _heartBurstId = 0;
+
   // Nasłuch realtime na rysunki przychodzące do nas.
   RealtimeChannel? _channel;
   // Animacja "materializacji" — odebrany rysunek odtwarza się kreska po kresce.
@@ -255,8 +263,8 @@ class _DrawingScreenState extends State<DrawingScreen>
           ),
           callback: _onIncoming,
         )
-        // Potwierdzenia odczytu: gdy odbiorca przeczyta MÓJ rysunek,
-        // przychodzi UPDATE (read_at) na wierszu, gdzie sender == ja.
+        // Odczyty i lajki: gdy odbiorca przeczyta/polubi MÓJ rysunek,
+        // przychodzi UPDATE (read_at/liked_at) na wierszu, gdzie sender == ja.
         .onPostgresChanges(
           event: PostgresChangeEvent.update,
           schema: 'public',
@@ -266,7 +274,7 @@ class _DrawingScreenState extends State<DrawingScreen>
             column: 'sender',
             value: myId,
           ),
-          callback: _onReadReceipt,
+          callback: _onDrawingUpdate,
         )
         .subscribe((status, [error]) {
           debugPrint('TINCAN_SUB: $status ${error ?? ''}');
@@ -302,7 +310,7 @@ class _DrawingScreenState extends State<DrawingScreen>
         // 1: jeśli ostatni rysunek w wątku jest OD peera — odtwórz go z
         // animacją (jak „na żywo"), zamiast pokazywać od razu w całości.
         if (items.isNotEmpty && !items.first.outgoing) {
-          _materialize(items.first.strokes);
+          _materialize(items.first.strokes, source: items.first);
           _markRead(items.first); // 3: wejście w czat = przeczytanie
         }
       }
@@ -335,7 +343,7 @@ class _DrawingScreenState extends State<DrawingScreen>
     if (_drawingMine && _strokes.isNotEmpty) {
       _stashedMine = List<Stroke>.from(_strokes);
     }
-    _materialize(received.strokes);
+    _materialize(received.strokes, source: received);
     _markRead(received); // 3: właśnie go widzę → oznacz jako przeczytany
 
     // Miły "ding" — sygnał, że coś przyszło (Web Audio na web; na mobile cisza).
@@ -353,20 +361,44 @@ class _DrawingScreenState extends State<DrawingScreen>
     }
   }
 
-  // 3: nadawca dostaje potwierdzenie odczytu (UPDATE read_at na jego rysunku).
-  void _onReadReceipt(PostgresChangePayload payload) {
+  // 3+5: nadawca dostaje na żywo odczyt (read_at) i lajk (liked_at) swojego rysunku.
+  void _onDrawingUpdate(PostgresChangePayload payload) {
     final rec = payload.newRecord;
     final id = rec['id'] as String?;
-    final readAt = DateTime.tryParse(rec['read_at']?.toString() ?? '')?.toLocal();
-    if (id == null || readAt == null) return;
+    if (id == null) return;
     final idx = _history.indexWhere((d) => d.id == id);
-    if (idx >= 0 && _history[idx].readAt == null) {
-      setState(() => _history[idx].readAt = readAt);
+    if (idx < 0) return;
+    final readAt = DateTime.tryParse(rec['read_at']?.toString() ?? '')?.toLocal();
+    final likedAt =
+        DateTime.tryParse(rec['liked_at']?.toString() ?? '')?.toLocal();
+    setState(() {
+      if (readAt != null) _history[idx].readAt = readAt;
+      _history[idx].likedAt = likedAt; // null = odlubione
+    });
+  }
+
+  // #5: polub / odlub odebrany rysunek pokazany na płótnie (dwuklik lub serce).
+  Future<void> _toggleLike() async {
+    final d = _shownReceived;
+    if (d == null || d.id == null) return;
+    final liked = d.likedAt == null; // przełącz stan
+    setState(() {
+      d.likedAt = liked ? DateTime.now() : null;
+      if (liked) {
+        _heartBurst = true;
+        _heartBurstId++; // restart animacji przy każdym polubieniu
+      }
+    });
+    try {
+      await supabase
+          .rpc('set_like', params: {'p_id': d.id, 'p_liked': liked});
+    } catch (e) {
+      debugPrint('TINCAN_LIKE_ERROR: $e');
     }
   }
 
   // Wrzuca dany rysunek na płótno i odpala animację materializacji.
-  void _materialize(List<Stroke> strokes) {
+  void _materialize(List<Stroke> strokes, {ReceivedDrawing? source}) {
     setState(() {
       _strokes
         ..clear()
@@ -375,6 +407,8 @@ class _DrawingScreenState extends State<DrawingScreen>
       _materializing = true;
       _drawingMine = false; // płótno pokazuje teraz cudzy rysunek
       _redo.clear();
+      // #5: który odebrany rysunek jest na płótnie (do polubienia dwuklikiem).
+      _shownReceived = (source != null && !source.outgoing) ? source : null;
     });
     // Czas odrysowywania ustawia odbiorca (suwak ⏱ w pasku u góry).
     _revealController
@@ -396,6 +430,7 @@ class _DrawingScreenState extends State<DrawingScreen>
       _drawingMine = true;
       _stashedMine = null;
       _redo.clear();
+      _shownReceived = null;
     });
   }
 
@@ -413,9 +448,10 @@ class _DrawingScreenState extends State<DrawingScreen>
     _materializing = false;
     _revealController.stop();
     setState(() {
-      // #5: jeśli na płótnie był cudzy (odebrany) rysunek — zaczynamy na czysto.
+      // jeśli na płótnie był cudzy (odebrany) rysunek — zaczynamy na czysto.
       if (!_drawingMine) _strokes.clear();
       _drawingMine = true; // to jest mój rysunek — chroń go przed nadpisaniem
+      _shownReceived = null; // rysuję swoje — nie ma czego lubić
       _currentStroke = Stroke(
         points: [position],
         // Gumka wycina tusz (patrz DrawingPainter) — kolor bez znaczenia dla
@@ -464,6 +500,7 @@ class _DrawingScreenState extends State<DrawingScreen>
       _drawingMine = false;
       _stashedMine = null;
       _redo.clear();
+      _shownReceived = null;
     });
   }
 
@@ -588,7 +625,7 @@ class _DrawingScreenState extends State<DrawingScreen>
     );
     if (picked != null) {
       _revealController.stop();
-      _materialize(picked.strokes);
+      _materialize(picked.strokes, source: picked);
     }
   }
 
@@ -647,6 +684,8 @@ class _DrawingScreenState extends State<DrawingScreen>
             onPanStart: (details) => _startStroke(details.localPosition),
             onPanUpdate: (details) => _addPoint(details.localPosition),
             onPanEnd: (details) => _endStroke(),
+            // #5: dwuklik w odebrany rysunek = polub/odlub (serce).
+            onDoubleTap: _toggleLike,
             child: Container(
               color: Colors.white,
               width: double.infinity,
@@ -731,6 +770,69 @@ class _DrawingScreenState extends State<DrawingScreen>
               ),
             ),
           ),
+          // #5: mały wskaźnik lajka przy odebranym rysunku (też do stuknięcia).
+          if (_shownReceived != null)
+            Positioned(
+              right: 16,
+              bottom: 16,
+              child: GestureDetector(
+                onTap: _toggleLike,
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: TC.ink.withValues(alpha: 0.15),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Icon(
+                    _shownReceived!.likedAt != null
+                        ? Icons.favorite
+                        : Icons.favorite_border,
+                    color: _shownReceived!.likedAt != null
+                        ? TC.coral
+                        : TC.inkSoft,
+                    size: 24,
+                  ),
+                ),
+              ),
+            ),
+          // #5: animacja serca po polubieniu (dwuklikiem).
+          if (_heartBurst)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Center(
+                  child: TweenAnimationBuilder<double>(
+                    key: ValueKey(_heartBurstId),
+                    tween: Tween(begin: 0.0, end: 1.0),
+                    duration: const Duration(milliseconds: 700),
+                    curve: Curves.easeOut,
+                    onEnd: () {
+                      if (mounted) setState(() => _heartBurst = false);
+                    },
+                    builder: (_, t, _) {
+                      final scale = 0.5 + t * 0.9;
+                      final opacity =
+                          (t < 0.4 ? t / 0.4 : (1 - (t - 0.4) / 0.6))
+                              .clamp(0.0, 1.0);
+                      return Opacity(
+                        opacity: opacity,
+                        child: Transform.scale(
+                          scale: scale,
+                          child: const Icon(Icons.favorite,
+                              color: TC.coral, size: 130),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -1027,11 +1129,24 @@ class GalleryScreen extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             Expanded(
-                              child: Container(
-                                color: Colors.white,
-                                child: CustomPaint(
-                                  painter: ThumbnailPainter(d.strokes),
-                                ),
+                              child: Stack(
+                                children: [
+                                  Positioned.fill(
+                                    child: Container(
+                                      color: Colors.white,
+                                      child: CustomPaint(
+                                        painter: ThumbnailPainter(d.strokes),
+                                      ),
+                                    ),
+                                  ),
+                                  if (d.likedAt != null)
+                                    const Positioned(
+                                      right: 6,
+                                      bottom: 6,
+                                      child: Icon(Icons.favorite,
+                                          color: TC.coral, size: 18),
+                                    ),
+                                ],
                               ),
                             ),
                             Padding(
