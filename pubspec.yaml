@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.2.1+4
+version: 1.2.2+5
 
 environment:
   sdk: ^3.12.2
@@ -64,13 +64,12 @@ flutter_launcher_icons:
   remove_alpha_ios: true # App Store nie przyjmuje ikon z kanałem alfa
   web:
     generate: true
-    background_color: "#6A57E8"
-    theme_color: "#6A57E8"
+    background_color: "#14101F"
+    theme_color: "#14101F"
   windows:
     generate: true
-  # Tło ikony adaptacyjnej = kremowy papier (jak w icon.png). NIE fiolet marki:
-  # lewa puszka jest fioletowa i zlewałaby się z tłem.
-  adaptive_icon_background: "#FAF4E8"
+  # Ikona adaptacyjna: tło = obraz (gradient + poświaty), znak = foreground.
+  adaptive_icon_background: "assets/icon/icon_bg.png"
   adaptive_icon_foreground: "assets/icon/icon_foreground.png"
   min_sdk_android: 21
 
