@@ -1,4 +1,8 @@
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:home_widget/home_widget.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'auth_gate.dart';
@@ -6,14 +10,42 @@ import 'chime.dart';
 import 'logo.dart';
 import 'push.dart';
 import 'theme.dart';
+import 'widget_bridge.dart';
+
+const kSupabaseUrl = 'https://safvbfwtqjlgcegnyckp.supabase.co';
+const kSupabaseAnonKey =
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNhZnZiZnd0cWpsZ2NlZ255Y2twIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NTg3NjAsImV4cCI6MjA5ODIzNDc2MH0.06giB9KYiw9BI1Q0FYijhn3-QO5PdcV9pZ0mi8ejS00';
+
+// Globalny klucz nawigatora — klik w widżet otwiera czat z konkretną osobą.
+final navigatorKey = GlobalKey<NavigatorState>();
+
+// Push w TLE (apka zwinięta/zabita): odśwież widżety, żeby rysunek „sam
+// wylądował" na ekranie głównym. Osobny izolat — własna inicjalizacja.
+@pragma('vm:entry-point')
+Future<void> tinCanBackgroundHandler(RemoteMessage message) async {
+  try {
+    await Firebase.initializeApp();
+    await Supabase.initialize(url: kSupabaseUrl, publishableKey: kSupabaseAnonKey);
+  } catch (_) {
+    // już zainicjalizowane w tym izolacie — w porządku
+  }
+  try {
+    await refreshDrawingWidgets();
+  } catch (e) {
+    debugPrint('TINCAN_BG_WIDGET_ERROR: $e');
+  }
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Supabase.initialize(
-    url: 'https://safvbfwtqjlgcegnyckp.supabase.co',
-    publishableKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNhZnZiZnd0cWpsZ2NlZ255Y2twIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NTg3NjAsImV4cCI6MjA5ODIzNDc2MH0.06giB9KYiw9BI1Q0FYijhn3-QO5PdcV9pZ0mi8ejS00',
+    url: kSupabaseUrl,
+    publishableKey: kSupabaseAnonKey,
   );
   await initFirebaseIfMobile();
+  if (!kIsWeb) {
+    FirebaseMessaging.onBackgroundMessage(tinCanBackgroundHandler);
+  }
   runApp(const TinCanApp());
 }
 
@@ -31,6 +63,30 @@ class _TinCanAppState extends State<TinCanApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     // 4: po uruchomieniu apki wyczyść powiadomienia z paska systemowego.
     clearDeliveredNotifications();
+    // Klik w widżet: uri tincan://chat/<peerId>?label=... -> otwórz czat.
+    if (isAndroidApp) {
+      HomeWidget.initiallyLaunchedFromHomeWidget().then(_openChatFromWidget);
+      HomeWidget.widgetClicked.listen(_openChatFromWidget);
+    }
+    // Push na pierwszym planie: odśwież widżety (rysunek/lajk), nawet gdy nie
+    // jesteśmy w danym czacie.
+    if (!kIsWeb) {
+      FirebaseMessaging.onMessage.listen((_) => refreshDrawingWidgets());
+    }
+  }
+
+  void _openChatFromWidget(Uri? uri) {
+    if (uri == null || uri.scheme != 'tincan' || uri.host != 'chat') return;
+    if (uri.pathSegments.isEmpty) return;
+    // bez sesji nie ma dokąd nawigować — AuthGate pokaże logowanie
+    if (Supabase.instance.client.auth.currentSession == null) return;
+    final peerId = uri.pathSegments.first;
+    final label = uri.queryParameters['label'] ?? 'Puszka';
+    navigatorKey.currentState?.push(
+      MaterialPageRoute(
+        builder: (_) => DrawingScreen(peerId: peerId, peerLabel: label),
+      ),
+    );
   }
 
   @override
@@ -53,6 +109,7 @@ class _TinCanAppState extends State<TinCanApp> with WidgetsBindingObserver {
       title: 'Tin Can',
       debugShowCheckedModeBanner: false,
       theme: buildTinCanTheme(),
+      navigatorKey: navigatorKey,
       home: const AuthGate(),
     );
   }
@@ -345,6 +402,7 @@ class _DrawingScreenState extends State<DrawingScreen>
     }
     _materialize(received.strokes, source: received);
     _markRead(received); // 3: właśnie go widzę → oznacz jako przeczytany
+    refreshDrawingWidgets(); // widżety na ekranie głównym też dostają rysunek
 
     // Miły "ding" — sygnał, że coś przyszło (Web Audio na web; na mobile cisza).
     playChime();

@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pasek "szybkie czaty": do 5 kółek z inicjałami, tap = czat z osobą. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/chats_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:gravity="center"
+    android:orientation="horizontal"
+    android:padding="8dp">
+
+    <FrameLayout
+        android:id="@+id/chat_slot_1"
+        android:layout_width="46dp"
+        android:layout_height="46dp"
+        android:layout_margin="4dp"
+        android:background="@drawable/widget_chip_bg">
+        <TextView
+            android:id="@+id/chat_initial_1"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:textColor="#4835BD"
+            android:textSize="19sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+    <FrameLayout
+        android:id="@+id/chat_slot_2"
+        android:layout_width="46dp"
+        android:layout_height="46dp"
+        android:layout_margin="4dp"
+        android:background="@drawable/widget_chip_bg">
+        <TextView
+            android:id="@+id/chat_initial_2"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:textColor="#4835BD"
+            android:textSize="19sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+    <FrameLayout
+        android:id="@+id/chat_slot_3"
+        android:layout_width="46dp"
+        android:layout_height="46dp"
+        android:layout_margin="4dp"
+        android:background="@drawable/widget_chip_bg">
+        <TextView
+            android:id="@+id/chat_initial_3"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:textColor="#4835BD"
+            android:textSize="19sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+    <FrameLayout
+        android:id="@+id/chat_slot_4"
+        android:layout_width="46dp"
+        android:layout_height="46dp"
+        android:layout_margin="4dp"
+        android:background="@drawable/widget_chip_bg">
+        <TextView
+            android:id="@+id/chat_initial_4"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:textColor="#4835BD"
+            android:textSize="19sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+    <FrameLayout
+        android:id="@+id/chat_slot_5"
+        android:layout_width="46dp"
+        android:layout_height="46dp"
+        android:layout_margin="4dp"
+        android:background="@drawable/widget_chip_bg">
+        <TextView
+            android:id="@+id/chat_initial_5"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:textColor="#4835BD"
+            android:textSize="19sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/chats_empty"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Ustaw czaty w aplikacji Tin Can"
+        android:textColor="#55506A"
+        android:textSize="11sp"
+        android:visibility="gone" />
+</LinearLayout>

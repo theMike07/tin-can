@@ -36,6 +36,40 @@
                 <data android:scheme="pl.themike07.tincan" android:host="login-callback"/>
             </intent-filter>
         </activity>
+        <!-- Widżety ekranu głównego (rysunek od osoby + pasek szybkich czatów) -->
+        <receiver
+            android:name=".TinCanDrawingWidgetProvider"
+            android:exported="false"
+            android:label="Tin Can — rysunek (kwadrat)">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/tin_can_widget_square_info" />
+        </receiver>
+        <receiver
+            android:name=".TinCanDrawingWidgetTallProvider"
+            android:exported="false"
+            android:label="Tin Can — rysunek (pion)">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/tin_can_widget_tall_info" />
+        </receiver>
+        <receiver
+            android:name=".TinCanChatsWidgetProvider"
+            android:exported="false"
+            android:label="Tin Can — szybkie czaty">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/tin_can_widget_chats_info" />
+        </receiver>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

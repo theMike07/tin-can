@@ -9,6 +9,7 @@ import 'logo.dart';
 import 'main.dart';
 import 'push.dart';
 import 'theme.dart';
+import 'widget_bridge.dart';
 
 // Google: wymaga konfiguracji w Google Cloud + Supabase (Client ID/Secret).
 const bool kGoogleReady = true;
@@ -346,6 +347,8 @@ class _HomeScreenState extends State<HomeScreen> {
           _groups = groups;
           _loading = false;
         });
+        // Widżety na ekranie głównym: dociągnij najnowsze rysunki.
+        refreshDrawingWidgets();
       }
     } catch (e) {
       if (mounted) {
@@ -638,9 +641,19 @@ class _HomeScreenState extends State<HomeScreen> {
             onSelected: (v) {
               if (v == 'logout') _supabase.auth.signOut();
               if (v == 'delete') _deleteAccount();
+              if (v == 'chats_widget') _configChatsWidget();
             },
-            itemBuilder: (_) => const [
-              PopupMenuItem(
+            itemBuilder: (_) => [
+              if (isAndroidApp)
+                const PopupMenuItem(
+                  value: 'chats_widget',
+                  child: ListTile(
+                    leading: Icon(Icons.widgets_outlined),
+                    title: Text('Widżet: szybkie czaty'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              const PopupMenuItem(
                 value: 'logout',
                 child: ListTile(
                   leading: Icon(Icons.logout),
@@ -648,7 +661,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              PopupMenuItem(
+              const PopupMenuItem(
                 value: 'delete',
                 child: ListTile(
                   leading: Icon(Icons.delete_forever, color: TC.coral600),
@@ -905,6 +918,86 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // Przypnij widżet z rysunkiem OD tej osoby (kwadrat/pion) na ekran główny.
+  Future<void> _pinDrawingWidget(Puszka p, {required bool tall}) async {
+    await pinDrawingWidget(peerId: p.otherId, label: p.label, tall: tall);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'Potwierdź przypięcie widżetu 📌 (albo dodaj go z menu ekranu głównego)')));
+    }
+  }
+
+  // Konfiguracja paska „szybkie czaty": wybór do 5 osób.
+  Future<void> _configChatsWidget() async {
+    final accepted = _puszki.where((p) => p.status == 'accepted').toList();
+    if (accepted.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Najpierw dodaj znajomych — z nich budujesz pasek.')));
+      return;
+    }
+    final selected = <String>{};
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setSt) {
+        return AlertDialog(
+          title: const Text('Widżet: szybkie czaty'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Wybierz osoby (max 5) — ikonka = wejście w czat:'),
+                ),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: accepted
+                        .map((p) => CheckboxListTile(
+                              value: selected.contains(p.otherId),
+                              title: Text(p.label),
+                              onChanged: (v) => setSt(() {
+                                if (v == true) {
+                                  if (selected.length < 5) {
+                                    selected.add(p.otherId);
+                                  }
+                                } else {
+                                  selected.remove(p.otherId);
+                                }
+                              }),
+                            ))
+                        .toList(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Anuluj')),
+            FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Przypnij')),
+          ],
+        );
+      }),
+    );
+    if (ok != true || selected.isEmpty) return;
+    final people = accepted
+        .where((p) => selected.contains(p.otherId))
+        .map((p) => {'id': p.otherId, 'label': p.label})
+        .toList();
+    await pinChatsWidget(people);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'Potwierdź przypięcie widżetu 📌 (albo dodaj go z menu ekranu głównego)')));
+    }
+  }
+
   // Usunięcie konta (wymóg sklepów). Nieodwracalne: RPC kasuje dane + auth.
   Future<void> _deleteAccount() async {
     final ok = await showDialog<bool>(
@@ -1046,9 +1139,30 @@ class _HomeScreenState extends State<HomeScreen> {
               icon: const Icon(Icons.more_vert, color: TC.inkSoft),
               onSelected: (v) {
                 if (v == 'remove') _removeFriend(p.connectionId, p.label);
+                if (v == 'widget_sq') _pinDrawingWidget(p, tall: false);
+                if (v == 'widget_tall') _pinDrawingWidget(p, tall: true);
               },
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'remove', child: Text('Usuń znajomego')),
+              itemBuilder: (_) => [
+                if (isAndroidApp) ...const [
+                  PopupMenuItem(
+                    value: 'widget_sq',
+                    child: ListTile(
+                      leading: Icon(Icons.crop_square),
+                      title: Text('Widżet: rysunek (kwadrat)'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'widget_tall',
+                    child: ListTile(
+                      leading: Icon(Icons.crop_portrait),
+                      title: Text('Widżet: rysunek (pion)'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ],
+                const PopupMenuItem(
+                    value: 'remove', child: Text('Usuń znajomego')),
               ],
             ),
             onTap: () {
