@@ -141,3 +141,19 @@ begin
     alter publication supabase_realtime add table public.message_reactions;
   end if;
 end $$;
+
+-- 4) Obrazki / GIFy w wiadomościach: URL w wiadomości + publiczny bucket.
+alter table public.messages add column if not exists image_url text;
+
+insert into storage.buckets (id, name, public)
+values ('chat-media', 'chat-media', true)
+on conflict (id) do nothing;
+
+-- odczyt publiczny (bucket public) + upload tylko dla zalogowanych
+drop policy if exists "chat-media read" on storage.objects;
+create policy "chat-media read" on storage.objects
+  for select using (bucket_id = 'chat-media');
+
+drop policy if exists "chat-media upload" on storage.objects;
+create policy "chat-media upload" on storage.objects
+  for insert to authenticated with check (bucket_id = 'chat-media');

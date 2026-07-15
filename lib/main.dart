@@ -47,6 +47,7 @@ void main() async {
   if (!kIsWeb) {
     FirebaseMessaging.onBackgroundMessage(tinCanBackgroundHandler);
   }
+  await loadThemePref(); // wczytaj wybór trybu ciemnego przed pierwszym buildem
   runApp(const TinCanApp());
 }
 
@@ -106,12 +107,20 @@ class _TinCanAppState extends State<TinCanApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Tin Can',
-      debugShowCheckedModeBanner: false,
-      theme: buildTinCanTheme(),
-      navigatorKey: navigatorKey,
-      home: const AuthGate(),
+    // Przebudowa całej apki, gdy zmienia się tryb ciemny. TC.dark ustawiamy
+    // PRZED zbudowaniem motywu, żeby wszystkie kolory TC.* były spójne.
+    return ValueListenableBuilder<bool>(
+      valueListenable: appDarkMode,
+      builder: (context, dark, _) {
+        TC.dark = dark;
+        return MaterialApp(
+          title: 'Tin Can',
+          debugShowCheckedModeBanner: false,
+          theme: buildTinCanTheme(),
+          navigatorKey: navigatorKey,
+          home: const AuthGate(),
+        );
+      },
     );
   }
 }
@@ -261,6 +270,9 @@ class _DrawingScreenState extends State<DrawingScreen>
   DateTime _lastTapUp = DateTime.fromMillisecondsSinceEpoch(0);
   Offset? _lastTapPos;
 
+  // Kolor płótna (niezależny od trybu ciemnego apki). Zawsze biały domyślnie.
+  Color _canvasColor = const Color(0xFFFFFFFF);
+
   // Ile sekund ma trwać odrysowywanie (materializacja) odebranej wiadomości.
   // Ustawia ODBIORCA suwakiem — duże rysunki nie muszą już przelatywać w sekundę.
   double _redrawSeconds = 3.0;
@@ -322,6 +334,9 @@ class _DrawingScreenState extends State<DrawingScreen>
     _subscribe();
     _loadHistory();
     _loadStreak();
+    loadCanvasColor().then((c) {
+      if (mounted) setState(() => _canvasColor = c);
+    });
   }
 
   // Wczytuje streak (kolejne dni z interakcją) — tylko dla czatów 1:1.
@@ -846,7 +861,7 @@ class _DrawingScreenState extends State<DrawingScreen>
           ],
         ),
         actions: [
-          if (!widget.isGroup) _buildFriendMenu(),
+          _buildFriendMenu(),
         ],
         // Drugi pasek: funkcje sesji rysowania (Wyślij wyeksponowany na środku)
         // + cienki pasek postępu materializacji pod spodem.
@@ -876,7 +891,7 @@ class _DrawingScreenState extends State<DrawingScreen>
             onPointerUp: _onPointerUp,
             onPointerCancel: _onPointerCancel,
             child: Container(
-              color: Colors.white,
+              color: _canvasColor,
               width: double.infinity,
               height: double.infinity,
               child: Stack(
@@ -887,7 +902,7 @@ class _DrawingScreenState extends State<DrawingScreen>
                     opacity: _showGrid ? 1.0 : 0.0,
                     duration: const Duration(milliseconds: 400),
                     curve: Curves.easeOut,
-                    child: CustomPaint(painter: _CanvasGridPainter()),
+                    child: CustomPaint(painter: _CanvasGridPainter(_canvasColor)),
                   ),
                   CustomPaint(
                     painter: DrawingPainter(
@@ -1076,11 +1091,12 @@ class _DrawingScreenState extends State<DrawingScreen>
     }
   }
 
-  // ⋮ przy nazwie — te same akcje co przy znajomym na liście.
+  // ⋮ przy nazwie — kolor płótna + (dla 1:1) akcje znajomego jak na liście.
   Widget _buildFriendMenu() {
     return PopupMenuButton<String>(
       tooltip: 'Więcej',
       onSelected: (v) {
+        if (v == 'canvas') _openCanvasColorSheet();
         if (v == 'chat') _openChat();
         if (v == 'widget_sq') _pinWidget(false);
         if (v == 'widget_tall') _pinWidget(true);
@@ -1088,14 +1104,23 @@ class _DrawingScreenState extends State<DrawingScreen>
       },
       itemBuilder: (_) => [
         const PopupMenuItem(
-          value: 'chat',
+          value: 'canvas',
           child: ListTile(
-            leading: Icon(Icons.chat_bubble_outline),
-            title: Text('Napisz wiadomość'),
+            leading: Icon(Icons.palette_outlined),
+            title: Text('Kolor płótna'),
             contentPadding: EdgeInsets.zero,
           ),
         ),
-        if (isAndroidApp) ...const [
+        if (!widget.isGroup)
+          const PopupMenuItem(
+            value: 'chat',
+            child: ListTile(
+              leading: Icon(Icons.chat_bubble_outline),
+              title: Text('Napisz wiadomość'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        if (isAndroidApp && !widget.isGroup) ...const [
           PopupMenuItem(
             value: 'widget_sq',
             child: ListTile(
@@ -1117,6 +1142,68 @@ class _DrawingScreenState extends State<DrawingScreen>
           const PopupMenuItem(
               value: 'remove', child: Text('Usuń znajomego')),
       ],
+    );
+  }
+
+  // Wybór koloru płótna (niezależny od motywu apki).
+  void _openCanvasColorSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 26),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Kolor płótna',
+                  style: Theme.of(ctx).textTheme.titleMedium),
+              const SizedBox(height: 6),
+              Text(
+                'Niezależny od motywu apki — możesz mieć białą kartkę nawet w trybie ciemnym.',
+                style: Theme.of(ctx).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  for (final c in kCanvasColors) _canvasSwatch(c, ctx),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _canvasSwatch(Color c, BuildContext sheetCtx) {
+    final selected = _canvasColor.toARGB32() == c.toARGB32();
+    return GestureDetector(
+      onTap: () {
+        setState(() => _canvasColor = c);
+        saveCanvasColor(c);
+        Navigator.pop(sheetCtx);
+      },
+      child: Container(
+        width: 58,
+        height: 58,
+        decoration: BoxDecoration(
+          color: c,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: selected ? TC.brand : TC.ink.withValues(alpha: 0.2),
+            width: selected ? 4 : 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: TC.ink.withValues(alpha: 0.1),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1438,10 +1525,14 @@ class DrawingPainter extends CustomPainter {
 
 // Kratka pomocnicza na płótnie — te same proporcje/kolor co siatka tła apki.
 class _CanvasGridPainter extends CustomPainter {
+  final Color canvasColor;
+  _CanvasGridPainter(this.canvasColor);
+
   @override
   void paint(Canvas canvas, Size size) {
+    // Kolor kratki kontrastuje z płótnem (ciemny na jasnym, jasny na ciemnym).
     final line = Paint()
-      ..color = TC.ink.withValues(alpha: 0.05)
+      ..color = contrastInk(canvasColor).withValues(alpha: 0.06)
       ..strokeWidth = 1;
     const step = 44.0;
     for (double x = step; x < size.width; x += step) {
@@ -1453,7 +1544,8 @@ class _CanvasGridPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _CanvasGridPainter oldDelegate) =>
+      oldDelegate.canvasColor != canvasColor;
 }
 
 // Ekran galerii — siatka miniatur odebranych rysunków. Klik = zwróć wybrany.
@@ -1586,7 +1678,7 @@ class GalleryScreen extends StatelessWidget {
                                   ] else
                                     Text(
                                       _ago(d.createdAt),
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                           fontSize: 11, color: TC.inkSoft),
                                     ),
                                 ],

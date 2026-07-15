@@ -639,11 +639,23 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.account_circle_outlined),
             tooltip: 'Konto',
             onSelected: (v) {
+              if (v == 'theme') setDarkMode(!appDarkMode.value);
               if (v == 'logout') _supabase.auth.signOut();
               if (v == 'delete') _deleteAccount();
               if (v == 'chats_widget') _configChatsWidget();
             },
             itemBuilder: (_) => [
+              PopupMenuItem(
+                value: 'theme',
+                child: ListTile(
+                  leading: Icon(appDarkMode.value
+                      ? Icons.light_mode_outlined
+                      : Icons.dark_mode_outlined),
+                  title: Text(
+                      appDarkMode.value ? 'Tryb jasny' : 'Tryb ciemny'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
               if (isAndroidApp)
                 const PopupMenuItem(
                   value: 'chats_widget',
@@ -737,7 +749,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 _myUsername!.isNotEmpty
                                             ? _myUsername!
                                             : 'Ustaw nazwę użytkownika',
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           fontSize: 16,
                                           fontWeight: FontWeight.w700,
                                           color: TC.ink,
@@ -746,7 +758,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       const SizedBox(height: 2),
                                       Text(
                                         user?.email ?? '—',
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                             fontSize: 13, color: TC.inkSoft),
                                       ),
                                     ],
@@ -1115,7 +1127,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 title: Text(g['name'] as String? ?? 'Grupa',
                     style: const TextStyle(fontWeight: FontWeight.w600)),
-                trailing: const Icon(Icons.chevron_right, color: TC.inkSoft),
+                trailing: Icon(Icons.chevron_right, color: TC.inkSoft),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => DrawingScreen(
@@ -1136,7 +1148,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: const TextStyle(fontWeight: FontWeight.w600)),
             subtitle: hasName ? Text(p.otherEmail) : null,
             trailing: PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert, color: TC.inkSoft),
+              icon: Icon(Icons.more_vert, color: TC.inkSoft),
               onSelected: (v) {
                 if (v == 'chat') {
                   Navigator.of(context).push(MaterialPageRoute(
@@ -1202,7 +1214,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: const TextStyle(fontWeight: FontWeight.w600)),
               subtitle: const Text('wysłano — oczekuje na akceptację'),
               trailing: IconButton(
-                icon: const Icon(Icons.close, color: TC.inkSoft),
+                icon: Icon(Icons.close, color: TC.inkSoft),
                 tooltip: 'Anuluj zaproszenie',
                 onPressed: () => _doRemove(p.connectionId),
               ),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'logo.dart';
@@ -23,9 +24,11 @@ class _ChatScreenState extends State<ChatScreen> {
   // Reakcje: messageId -> (userId -> emoji). Jedna reakcja na osobę na wiadomość.
   final Map<String, Map<String, String>> _reactions = {};
   static const _reactionSet = ['❤️', '😂', '👍', '😮', '😢'];
+  final _picker = ImagePicker();
   RealtimeChannel? _channel;
   bool _loading = true;
   bool _sending = false;
+  bool _uploading = false;
 
   @override
   void initState() {
@@ -39,7 +42,7 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final rows = await supabase
           .from('messages')
-          .select('id, sender, recipient, body, created_at')
+          .select('id, sender, recipient, body, image_url, created_at')
           .or('and(sender.eq.$myId,recipient.eq.${widget.peerId}),'
               'and(sender.eq.${widget.peerId},recipient.eq.$myId)')
           .order('created_at', ascending: true)
@@ -181,7 +184,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final inserted = await supabase
           .from('messages')
           .insert({'sender': myId, 'recipient': widget.peerId, 'body': text})
-          .select('id, sender, recipient, body, created_at')
+          .select('id, sender, recipient, body, image_url, created_at')
           .single();
       _input.clear();
       setState(() => _messages.add(inserted));
@@ -193,6 +196,60 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } finally {
       if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  // Wyślij obrazek/GIF z galerii: upload do storage -> wiadomość z image_url.
+  Future<void> _pickAndSendImage() async {
+    if (_uploading || _sending) return;
+    try {
+      // Bez maxWidth/imageQuality — nie przekodowujemy (GIF zostaje animowany).
+      final XFile? file = await _picker.pickImage(source: ImageSource.gallery);
+      if (file == null) return;
+      final bytes = await file.readAsBytes();
+      if (bytes.lengthInBytes > 8 * 1024 * 1024) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Plik za duży (max 8 MB).')));
+        }
+        return;
+      }
+      setState(() => _uploading = true);
+      final ext = file.name.contains('.')
+          ? file.name.split('.').last.toLowerCase()
+          : 'jpg';
+      final contentType = switch (ext) {
+        'gif' => 'image/gif',
+        'png' => 'image/png',
+        'webp' => 'image/webp',
+        _ => 'image/jpeg',
+      };
+      final path = '$myId/${DateTime.now().millisecondsSinceEpoch}.$ext';
+      await supabase.storage.from('chat-media').uploadBinary(
+            path,
+            bytes,
+            fileOptions: FileOptions(contentType: contentType),
+          );
+      final url = supabase.storage.from('chat-media').getPublicUrl(path);
+      final inserted = await supabase
+          .from('messages')
+          .insert({
+            'sender': myId,
+            'recipient': widget.peerId,
+            'body': '',
+            'image_url': url,
+          })
+          .select('id, sender, recipient, body, image_url, created_at')
+          .single();
+      setState(() => _messages.add(inserted));
+      _scrollToEnd();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Nie wysłano obrazka: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _uploading = false);
     }
   }
 
@@ -272,6 +329,8 @@ class _ChatScreenState extends State<ChatScreen> {
         ? '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}'
         : '';
     final id = m['id'] as String?;
+    final imageUrl = m['image_url'] as String?;
+    final hasImage = imageUrl != null && imageUrl.isNotEmpty;
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
@@ -283,13 +342,15 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             Container(
         margin: const EdgeInsets.symmetric(vertical: 3),
-        padding: const EdgeInsets.fromLTRB(14, 9, 14, 7),
+        padding: hasImage
+            ? const EdgeInsets.all(5)
+            : const EdgeInsets.fromLTRB(14, 9, 14, 7),
         constraints:
             BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
         decoration: BoxDecoration(
           color: mine
               ? TC.brand
-              : Color.alphaBlend(Colors.white.withValues(alpha: 0.9), TC.paper),
+              : TC.glass,
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(18),
             topRight: const Radius.circular(18),
@@ -302,19 +363,62 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              body,
-              style: TextStyle(
-                  color: mine ? Colors.white : TC.ink,
-                  fontSize: 15,
-                  height: 1.25),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              time,
-              style: TextStyle(
-                  fontSize: 10,
-                  color: mine ? Colors.white70 : TC.inkSoft),
+            if (hasImage)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: 340,
+                    maxWidth: MediaQuery.of(context).size.width * 0.68,
+                  ),
+                  child: Image.network(
+                    imageUrl,
+                    fit: BoxFit.contain,
+                    loadingBuilder: (c, child, prog) => prog == null
+                        ? child
+                        : const SizedBox(
+                            width: 180,
+                            height: 180,
+                            child: Center(
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2)),
+                          ),
+                    errorBuilder: (c, e, s) => SizedBox(
+                      width: 140,
+                      height: 100,
+                      child: Center(
+                        child: Icon(Icons.broken_image_outlined,
+                            color: mine ? Colors.white70 : TC.inkSoft),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            if (body.isNotEmpty) ...[
+              if (hasImage) const SizedBox(height: 6),
+              Padding(
+                padding: hasImage
+                    ? const EdgeInsets.symmetric(horizontal: 8)
+                    : EdgeInsets.zero,
+                child: Text(
+                  body,
+                  style: TextStyle(
+                      color: mine ? Colors.white : TC.ink,
+                      fontSize: 15,
+                      height: 1.25),
+                ),
+              ),
+            ],
+            Padding(
+              padding: hasImage
+                  ? const EdgeInsets.fromLTRB(8, 3, 8, 2)
+                  : const EdgeInsets.only(top: 2),
+              child: Text(
+                time,
+                style: TextStyle(
+                    fontSize: 10,
+                    color: mine ? Colors.white70 : TC.inkSoft),
+              ),
             ),
           ],
         ),
@@ -335,7 +439,7 @@ class _ChatScreenState extends State<ChatScreen> {
       margin: const EdgeInsets.only(top: 1, bottom: 3),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
-        color: Color.alphaBlend(Colors.white.withValues(alpha: 0.9), TC.paper),
+        color: TC.glass,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: mine != null
@@ -360,6 +464,20 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
+            _uploading
+                ? const Padding(
+                    padding: EdgeInsets.all(11),
+                    child: SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                  )
+                : IconButton(
+                    onPressed: _pickAndSendImage,
+                    icon: const Icon(Icons.add_photo_alternate_outlined),
+                    tooltip: 'Wyślij obrazek / GIF',
+                    color: TC.inkSoft,
+                  ),
             Expanded(
               child: TextField(
                 controller: _input,
@@ -369,7 +487,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 decoration: InputDecoration(
                   hintText: 'Napisz wiadomość…',
                   filled: true,
-                  fillColor: Colors.white.withValues(alpha: 0.7),
+                  fillColor: TC.fieldFill,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(22),
                     borderSide:
