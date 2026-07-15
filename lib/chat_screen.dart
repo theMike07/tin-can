@@ -1,8 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'logo.dart';
 import 'theme.dart';
 
 // Zwykły czat tekstowy (DM 1:1). Szyfrowanie E2E planowane w przyszłości.
@@ -29,13 +30,29 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _loading = true;
   bool _sending = false;
   bool _uploading = false;
+  String? _peerAvatar; // zdjęcie profilowe rozmówcy (base64) do nagłówka
 
   @override
   void initState() {
     super.initState();
     myId = supabase.auth.currentUser!.id;
     _load();
+    _loadPeerAvatar();
     _subscribe();
+  }
+
+  // Awatar rozmówcy do nagłówka. Odporny na brak kolumny/wiersza (fallback = logo).
+  Future<void> _loadPeerAvatar() async {
+    try {
+      final row = await supabase
+          .from('profiles')
+          .select()
+          .eq('id', widget.peerId)
+          .maybeSingle();
+      if (mounted && row != null) {
+        setState(() => _peerAvatar = row['avatar_url'] as String?);
+      }
+    } catch (_) {}
   }
 
   Future<void> _load() async {
@@ -278,12 +295,13 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        centerTitle: true,
         titleSpacing: 8,
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const TinCanLogo(width: 24),
-            const SizedBox(width: 8),
+            _peerAvatarBadge(),
+            const SizedBox(width: 9),
             Flexible(
               child: Text(widget.peerLabel, overflow: TextOverflow.ellipsis),
             ),
@@ -318,6 +336,50 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  // Kółko profilowe rozmówcy w nagłówku: zdjęcie albo brandowy placeholder z
+  // inicjałem. Bardzo subtelna okrągła obwódka — nie zlewa się z tłem.
+  Widget _peerAvatarBadge() {
+    const d = 32.0;
+    final b64 = _peerAvatar;
+    Widget inner;
+    if (b64 != null && b64.isNotEmpty) {
+      try {
+        inner = Image.memory(base64Decode(b64),
+            width: d, height: d, fit: BoxFit.cover, gaplessPlayback: true);
+      } catch (_) {
+        inner = _avatarFallback(d);
+      }
+    } else {
+      inner = _avatarFallback(d);
+    }
+    return Container(
+      width: d,
+      height: d,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: TC.ink.withValues(alpha: 0.15)),
+      ),
+      child: ClipOval(child: inner),
+    );
+  }
+
+  Widget _avatarFallback(double d) {
+    final s = widget.peerLabel.replaceAll('@', '').trim();
+    final initial = s.isEmpty ? '🥫' : s.substring(0, 1).toUpperCase();
+    return Container(
+      width: d,
+      height: d,
+      decoration: const BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: TC.brandGradient,
+      ),
+      alignment: Alignment.center,
+      child: Text(initial,
+          style: const TextStyle(
+              color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15)),
     );
   }
 

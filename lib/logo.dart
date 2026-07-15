@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'theme.dart';
+
 /// Znak marki Tin Can: dwie puszki + „sznurek" z DOKŁADNIE 3 kropek.
 /// Wierne odwzorowanie z `tin_can_web/src/components/Logo.astro`
 /// (viewBox 0 0 40 28). Rysowane wektorowo — ostre przy każdym rozmiarze.
@@ -7,23 +9,27 @@ class TinCanLogo extends StatelessWidget {
   final double width;
   final Color canA; // puszka lewa (fioletowa)
   final Color canB; // puszka prawa (koralowa)
-  final Color dot; // kolor kropek „sznurka"
+  // Kolor kropek „sznurka". null = automatycznie: ciemne kropki na jasnym
+  // motywie, białe na ciemnym (żeby nie zlewały się z tłem — patrz TC.dark).
+  final Color? dot;
 
   const TinCanLogo({
     super.key,
     this.width = 120,
     this.canA = const Color(0xFF6A57E8),
     this.canB = const Color(0xFFFF6B6B),
-    this.dot = const Color(0xFF201D2E),
+    this.dot,
   });
 
   @override
   Widget build(BuildContext context) {
+    final dotColor =
+        dot ?? (TC.dark ? Colors.white : const Color(0xFF201D2E));
     return SizedBox(
       width: width,
       height: width * 28 / 40, // proporcje viewBox
       child: CustomPaint(
-        painter: _MarkPainter(canA: canA, canB: canB, dot: dot),
+        painter: _MarkPainter(canA: canA, canB: canB, dot: dotColor),
       ),
     );
   }

@@ -7,9 +7,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:home_widget/home_widget.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'main.dart' show Stroke;
+import 'theme.dart' show adaptiveInkFor;
 
 // ---------------------------------------------------------------------------
 //  Widżety ekranu głównego (Android): most Dart <-> AppWidgetProvider.
@@ -48,8 +50,9 @@ String _fmtTime(DateTime t) {
   return '${t.day.toString().padLeft(2, '0')}.${t.month.toString().padLeft(2, '0')} $hh';
 }
 
-// --- Render: kreski -> PNG (białe tło, dopasowanie do bbox, gumka wycina). ---
-Future<Uint8List?> _renderStrokesPng(List<Stroke> strokes) async {
+// --- Render: kreski -> PNG (tło = kolor płótna z apki, gumka wycina). ---
+Future<Uint8List?> _renderStrokesPng(
+    List<Stroke> strokes, Color canvasColor) async {
   if (strokes.isEmpty) return null;
   double minX = double.infinity, minY = double.infinity;
   double maxX = -double.infinity, maxY = -double.infinity;
@@ -74,9 +77,9 @@ Future<Uint8List?> _renderStrokesPng(List<Stroke> strokes) async {
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder);
   final rect = Rect.fromLTWH(0, 0, outW, outH);
-  canvas.drawRect(rect, Paint()..color = Colors.white);
+  canvas.drawRect(rect, Paint()..color = canvasColor);
 
-  // Warstwa na tusz — gumka (BlendMode.clear) odsłania białe tło, jak w apce.
+  // Warstwa na tusz — gumka (BlendMode.clear) odsłania kolor płótna, jak w apce.
   canvas.saveLayer(rect, Paint());
   canvas.translate(
     (outW - w * scale) / 2 - minX * scale,
@@ -86,7 +89,7 @@ Future<Uint8List?> _renderStrokesPng(List<Stroke> strokes) async {
   for (final stroke in strokes) {
     if (stroke.points.length < 2) continue;
     final paint = Paint()
-      ..color = stroke.color
+      ..color = stroke.adaptive ? adaptiveInkFor(canvasColor) : stroke.color
       ..strokeWidth = stroke.width
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
@@ -134,6 +137,7 @@ Future<void> _refreshPerson(
   String myId,
   String peerId,
   String label,
+  Color canvasColor,
 ) async {
   final rows = await supabase
       .from('drawings')
@@ -152,7 +156,7 @@ Future<void> _refreshPerson(
   final strokes = (row['strokes'] as List)
       .map((e) => Stroke.fromJson(e as Map<String, dynamic>))
       .toList();
-  final png = await _renderStrokesPng(strokes);
+  final png = await _renderStrokesPng(strokes, canvasColor);
   if (png == null) return;
   final dir = await getApplicationSupportDirectory();
   final file = File('${dir.path}/widget_$peerId.png');
@@ -172,18 +176,38 @@ Future<void> _pushUpdate() async {
   await HomeWidget.updateWidget(qualifiedAndroidName: _qualifiedChats);
 }
 
+// Zapisuje motyw widżetów dla warstwy Kotlin: kolor płótna (ten sam co w czacie
+// rysunkowym) i czy apka jest w trybie ciemnym. Zwraca kolor płótna do renderu.
+Future<Color> _saveWidgetTheme() async {
+  var canvasColor = const Color(0xFFFFFFFF);
+  var dark = false;
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getInt('canvas_color');
+    if (v != null) canvasColor = Color(v);
+    dark = prefs.getBool('dark_mode') ?? false;
+  } catch (_) {}
+  // Kolor jako #RRGGBB (String) — bezpieczne dla Color.parseColor po stronie
+  // Android (int przez home_widget bywa Long → wyjątek przy getInt).
+  final rgb = canvasColor.toARGB32() & 0xFFFFFF;
+  await HomeWidget.saveWidgetData<String>(
+      'widget_canvas', '#${rgb.toRadixString(16).padLeft(6, '0')}');
+  await HomeWidget.saveWidgetData<bool>('widget_dark', dark);
+  return canvasColor;
+}
+
 /// Odśwież obrazy wszystkich skonfigurowanych widżetów rysunku.
 /// Wołane: po wejściu do apki, po odebraniu rysunku, z handlera push w tle.
 Future<void> refreshDrawingWidgets() async {
   if (!isAndroidApp) return;
   try {
+    final canvasColor = await _saveWidgetTheme();
     final supabase = Supabase.instance.client;
     final me = supabase.auth.currentUser?.id;
     if (me == null) return;
     final people = await _widgetPeople();
-    if (people.isEmpty) return;
     for (final p in people) {
-      await _refreshPerson(supabase, me, p['id']!, p['label']!);
+      await _refreshPerson(supabase, me, p['id']!, p['label']!, canvasColor);
     }
     await _pushUpdate();
   } catch (e) {
@@ -222,6 +246,7 @@ Future<void> pinDrawingWidget({
 Future<void> pinChatsWidget(List<Map<String, String>> people) async {
   if (!isAndroidApp) return;
   try {
+    await _saveWidgetTheme(); // pasek czatów też ma iść w parze z motywem apki
     final slots = people
         .take(5)
         .map((p) => {

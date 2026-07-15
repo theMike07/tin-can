@@ -1,5 +1,6 @@
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:shared_preferences/shared_preferences.dart';
 
 // Rodziny fontów (spakowane offline w assets/fonts, deklaracja w pubspec).
@@ -54,6 +55,13 @@ Future<void> saveCanvasColor(Color c) async {
 // Kolor kratki/pomocniczych elementów kontrastujący z danym tłem.
 Color contrastInk(Color bg) =>
     bg.computeLuminance() > 0.5 ? const Color(0xFF201D2E) : Colors.white;
+
+// Tusz „adaptacyjny" (czarny↔biały): pełna czerń na jasnym płótnie, biel na
+// ciemnym. Kreska oznaczona jako adaptacyjna renderuje się kontrastowo u KAŻDEGO
+// odbiorcy względem JEGO koloru płótna — czarny rysunek z białej kartki pojawia
+// się na czarnym płótnie jako biały.
+Color adaptiveInkFor(Color bg) =>
+    bg.computeLuminance() > 0.5 ? Colors.black : Colors.white;
 
 // ---------------------------------------------------------------------------
 //  Motyw marki Tin Can — port języka designu ze stron WWW.
@@ -165,6 +173,13 @@ ThemeData buildTinCanTheme() {
         height: 1.0,
       ),
       iconTheme: IconThemeData(color: TC.ink),
+      // Ikony paska stanu telefonu (godzina, powiadomienia) muszą kontrastować
+      // z tłem: ciemne na jasnym motywie, jasne na ciemnym.
+      systemOverlayStyle: TC.dark
+          ? SystemUiOverlayStyle.light
+              .copyWith(statusBarColor: Colors.transparent)
+          : SystemUiOverlayStyle.dark
+              .copyWith(statusBarColor: Colors.transparent),
     ),
     cardTheme: CardThemeData(
       color: TC.glass,
@@ -223,11 +238,19 @@ ThemeData buildTinCanTheme() {
         borderSide: const BorderSide(color: TC.brand, width: 1.6),
       ),
     ),
-    sliderTheme: const SliderThemeData(
+    sliderTheme: SliderThemeData(
       activeTrackColor: TC.brand,
       thumbColor: TC.brand,
-      overlayColor: Color(0x226A57E8),
-      inactiveTrackColor: TC.brand100,
+      overlayColor: const Color(0x226A57E8),
+      // Nieaktywny tor i „kropki" stopni muszą być widoczne również na ciemnym.
+      inactiveTrackColor:
+          TC.dark ? Colors.white.withValues(alpha: 0.20) : TC.brand100,
+      activeTickMarkColor: Colors.white.withValues(alpha: 0.9),
+      inactiveTickMarkColor: TC.dark
+          ? Colors.white.withValues(alpha: 0.5)
+          : TC.brand.withValues(alpha: 0.45),
+      valueIndicatorColor: TC.brand,
+      valueIndicatorTextStyle: const TextStyle(color: Colors.white),
     ),
     snackBarTheme: SnackBarThemeData(
       backgroundColor: TC.ink,

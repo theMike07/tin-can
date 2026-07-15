@@ -2,6 +2,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:home_widget/home_widget.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -113,6 +114,17 @@ class _TinCanAppState extends State<TinCanApp> with WidgetsBindingObserver {
       valueListenable: appDarkMode,
       builder: (context, dark, _) {
         TC.dark = dark;
+        // Pasek stanu i pasek nawigacji telefonu podążają za motywem: przy
+        // przełączeniu na jasny ikony (godzina, powiadomienia) znów są ciemne.
+        SystemChrome.setSystemUIOverlayStyle(
+          (dark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
+              .copyWith(
+            statusBarColor: Colors.transparent,
+            systemNavigationBarColor: TC.paper,
+            systemNavigationBarIconBrightness:
+                dark ? Brightness.light : Brightness.dark,
+          ),
+        );
         return MaterialApp(
           title: 'Tin Can',
           debugShowCheckedModeBanner: false,
@@ -131,12 +143,17 @@ class Stroke {
   final Color color;
   final double width;
   final bool isEraser; // gumka: wycinamy tusz (BlendMode.clear), nie malujemy
+  // Tusz adaptacyjny (czarny↔biały): renderowany kontrastowo do koloru płótna
+  // U KAŻDEGO odbiorcy (patrz adaptiveInkFor). `color` trzymany jako sensowny
+  // fallback. Serializowany dodatkowym kluczem 'ink':1 (stare wersje go ignorują).
+  final bool adaptive;
 
   Stroke({
     required this.points,
     required this.color,
     required this.width,
     this.isEraser = false,
+    this.adaptive = false,
   });
 
   // Kreska -> JSON do bazy. Kolor jako RRGGBB (hex), punkty spłaszczone [dx,dy,dx,dy,...].
@@ -149,6 +166,7 @@ class Stroke {
       'color': hex,
       'width': width,
       'points': points.expand((p) => [p.dx, p.dy]).toList(),
+      if (adaptive) 'ink': 1,
     };
   }
 
@@ -160,10 +178,16 @@ class Stroke {
       pts.add(Offset(flat[i].toDouble(), flat[i + 1].toDouble()));
     }
     final rgb = int.parse(json['color'] as String, radix: 16);
+    final ink = json['ink'];
+    // Zgodność wstecz: dawny „ołówek" zapisany jako czysta czerń (000000) bez
+    // flagi też traktujemy jako adaptacyjny — inaczej byłby niewidoczny na
+    // ciemnym płótnie. Stałe kolory palety nigdy nie są czystą czernią.
+    final adaptive = ink == 1 || ink == true || rgb == 0x000000;
     return Stroke(
       points: pts,
       color: Color.fromARGB(255, (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF),
       width: (json['width'] as num).toDouble(),
+      adaptive: adaptive,
     );
   }
 
@@ -259,6 +283,9 @@ class _DrawingScreenState extends State<DrawingScreen>
 
   // Wybór pędzla.
   Color _brushColor = Colors.black;
+  // Tusz adaptacyjny (czarny↔biały wg płótna) — domyślny „ołówek". Rysuje czarno
+  // na jasnej kartce, biało na ciemnej, także u odbiorcy z innym płótnem.
+  bool _adaptiveInk = true;
   double _brushWidth = 6.0; // domyślna grubość — zawsze ta sama przy wejściu
   bool _eraser = false;
 
@@ -601,13 +628,17 @@ class _DrawingScreenState extends State<DrawingScreen>
       if (!_drawingMine) _strokes.clear();
       _drawingMine = true; // to jest mój rysunek — chroń go przed nadpisaniem
       _shownReceived = null; // rysuję swoje — nie ma czego lubić
+      // Tusz adaptacyjny liczymy względem MOJEGO płótna (podgląd lokalny);
+      // flaga `adaptive` sprawia, że u odbiorcy przeliczy się do JEGO płótna.
+      final ink = _adaptiveInk ? adaptiveInkFor(_canvasColor) : _brushColor;
       _currentStroke = Stroke(
         points: [position],
         // Gumka wycina tusz (patrz DrawingPainter) — kolor bez znaczenia dla
         // renderu, ale zostaje biały dla zapisu i podglądu u odbiorcy.
-        color: _eraser ? Colors.white : _brushColor,
+        color: _eraser ? Colors.white : ink,
         width: _eraser ? 18.0 : _brushWidth,
         isEraser: _eraser,
+        adaptive: !_eraser && _adaptiveInk,
       );
     });
   }
@@ -909,6 +940,7 @@ class _DrawingScreenState extends State<DrawingScreen>
                       strokes: _strokes,
                       currentStroke: _currentStroke,
                       reveal: _reveal,
+                      canvasColor: _canvasColor,
                     ),
                   ),
                 ],
@@ -1183,6 +1215,8 @@ class _DrawingScreenState extends State<DrawingScreen>
       onTap: () {
         setState(() => _canvasColor = c);
         saveCanvasColor(c);
+        // Widżety rysunku mają to samo płótno co czat — odśwież je od razu.
+        refreshDrawingWidgets();
         Navigator.pop(sheetCtx);
       },
       child: Container(
@@ -1267,8 +1301,9 @@ class _DrawingScreenState extends State<DrawingScreen>
 
   // --- Pasek narzędzi (pędzel) ---
 
+  // Pierwsze pole palety to tusz adaptacyjny (czarny↔biały) — renderowane
+  // osobno (_adaptiveSwatch). Pozostałe kolory są stałe niezależnie od płótna.
   static const List<Color> _palette = [
-    Colors.black,
     Color(0xFFE53935),
     Color(0xFFFB8C00),
     Color(0xFFFDD835),
@@ -1324,6 +1359,7 @@ class _DrawingScreenState extends State<DrawingScreen>
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: Row(
                     children: [
+                      _adaptiveSwatch(),
                       for (final c in _palette) _colorSwatch(c),
                       Container(
                         width: 1,
@@ -1355,10 +1391,11 @@ class _DrawingScreenState extends State<DrawingScreen>
   }
 
   Widget _colorSwatch(Color c) {
-    final selected = !_eraser && _brushColor == c;
+    final selected = !_eraser && !_adaptiveInk && _brushColor == c;
     return GestureDetector(
       onTap: () => setState(() {
         _brushColor = c;
+        _adaptiveInk = false;
         _eraser = false;
       }),
       child: Container(
@@ -1370,6 +1407,32 @@ class _DrawingScreenState extends State<DrawingScreen>
           shape: BoxShape.circle,
           border: Border.all(
             color: selected ? TC.brand : Colors.black26,
+            width: selected ? 3 : 1,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Tusz adaptacyjny: pokazuje kolor, jaki realnie zostawi na AKTUALNYM płótnie
+  // (czerń na jasnym, biel na ciemnym). Dwubarwna obwódka podpowiada zmienność.
+  Widget _adaptiveSwatch() {
+    final display = adaptiveInkFor(_canvasColor);
+    final selected = !_eraser && _adaptiveInk;
+    return GestureDetector(
+      onTap: () => setState(() {
+        _adaptiveInk = true;
+        _eraser = false;
+      }),
+      child: Container(
+        width: 30,
+        height: 30,
+        margin: const EdgeInsets.symmetric(horizontal: 4),
+        decoration: BoxDecoration(
+          color: display,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: selected ? TC.brand : TC.inkSoft.withValues(alpha: 0.55),
             width: selected ? 3 : 1,
           ),
         ),
@@ -1417,13 +1480,29 @@ class _DrawingScreenState extends State<DrawingScreen>
                     Text('Grubość rysika',
                         style: Theme.of(ctx).textTheme.titleMedium),
                     const SizedBox(height: 18),
+                    // Podgląd na tle AKTUALNEGO płótna + obwódka — dzięki temu
+                    // zmiana grubości np. czarnego rysika na ciemnym motywie jest
+                    // widoczna (bez tła czarny na czarnym byłby niewidoczny).
                     Center(
                       child: Container(
-                        width: _brushWidth * 2 + 24,
-                        height: _brushWidth,
+                        width: double.infinity,
+                        height: 44,
+                        alignment: Alignment.center,
                         decoration: BoxDecoration(
-                          color: _brushColor,
-                          borderRadius: BorderRadius.circular(_brushWidth),
+                          color: _canvasColor,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                              color: TC.ink.withValues(alpha: 0.18)),
+                        ),
+                        child: Container(
+                          width: _brushWidth * 2 + 24,
+                          height: _brushWidth,
+                          decoration: BoxDecoration(
+                            color: _adaptiveInk
+                                ? adaptiveInkFor(_canvasColor)
+                                : _brushColor,
+                            borderRadius: BorderRadius.circular(_brushWidth),
+                          ),
                         ),
                       ),
                     ),
@@ -1463,11 +1542,15 @@ class DrawingPainter extends CustomPainter {
   // Ułamek 0..1 — ile punktów (w kolejności rysowania, przez wszystkie kreski)
   // odsłonić. 1.0 = cały rysunek. Używane do "materializacji" odebranego rysunku.
   final double reveal;
+  // Kolor płótna — potrzebny, by tusz adaptacyjny (czarny↔biały) renderować
+  // kontrastowo do TEGO płótna, także dla rysunków przyjętych od innej osoby.
+  final Color canvasColor;
 
   DrawingPainter({
     required this.strokes,
     required this.currentStroke,
     this.reveal = 1.0,
+    this.canvasColor = const Color(0xFFFFFFFF),
   });
 
   // Rysuje kreskę tylko do `count` pierwszych punktów (count >= length = cała).
@@ -1476,7 +1559,7 @@ class DrawingPainter extends CustomPainter {
     if (n < 2) return;
 
     final paint = Paint()
-      ..color = stroke.color
+      ..color = stroke.adaptive ? adaptiveInkFor(canvasColor) : stroke.color
       ..strokeWidth = stroke.width
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
@@ -1698,8 +1781,9 @@ class GalleryScreen extends StatelessWidget {
 // Rysuje rysunek przeskalowany tak, by zmieścił się w kadrze miniatury.
 class ThumbnailPainter extends CustomPainter {
   final List<Stroke> strokes;
+  final Color bg; // tło miniatury — do przeliczenia tuszu adaptacyjnego
 
-  ThumbnailPainter(this.strokes);
+  ThumbnailPainter(this.strokes, {this.bg = const Color(0xFFFFFFFF)});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1735,7 +1819,7 @@ class ThumbnailPainter extends CustomPainter {
     for (final stroke in strokes) {
       if (stroke.points.length < 2) continue;
       final paint = Paint()
-        ..color = stroke.color
+        ..color = stroke.adaptive ? adaptiveInkFor(bg) : stroke.color
         ..strokeWidth = stroke.width
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round

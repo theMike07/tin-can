@@ -5,6 +5,7 @@ import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
 import android.content.Context
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.net.Uri
 import android.view.View
 import android.widget.RemoteViews
@@ -32,6 +33,14 @@ abstract class BaseDrawingWidget : AppWidgetProvider() {
         ids: IntArray,
     ) {
         val prefs = HomeWidgetPlugin.getData(context)
+        // Motyw z apki: kolor płótna (jak w czacie rysunkowym) + tryb ciemny.
+        val dark = prefs.getBoolean("widget_dark", false)
+        val canvasColor = try {
+            Color.parseColor(prefs.getString("widget_canvas", "#FFFFFF"))
+        } catch (_: Exception) {
+            Color.WHITE
+        }
+        val captionColor = if (dark) Color.parseColor("#A39DBE") else Color.parseColor("#55506A")
         for (id in ids) {
             // Mapowanie instancja -> osoba; nowa instancja przejmuje "pending"
             // (konfigurację zapisaną w apce tuż przed przypięciem widżetu).
@@ -48,6 +57,14 @@ abstract class BaseDrawingWidget : AppWidgetProvider() {
             }
 
             val views = RemoteViews(context.packageName, R.layout.tin_can_widget_drawing)
+            // Chrom widżetu podąża za motywem apki: karta jasna/ciemna, wnętrze
+            // płótna = kolor wybrany w apce, podpisy w kontraście do karty.
+            views.setInt(
+                R.id.widget_root, "setBackgroundResource",
+                if (dark) R.drawable.widget_bg_dark else R.drawable.widget_bg)
+            views.setInt(R.id.widget_canvas, "setBackgroundColor", canvasColor)
+            views.setTextColor(R.id.widget_caption, captionColor)
+            views.setTextColor(R.id.widget_empty, captionColor)
             var configured = false
             if (personJson != null) {
                 try {
@@ -111,6 +128,7 @@ class TinCanChatsWidgetProvider : AppWidgetProvider() {
         ids: IntArray,
     ) {
         val prefs = HomeWidgetPlugin.getData(context)
+        val dark = prefs.getBoolean("widget_dark", false)
         val arr = try {
             JSONArray(prefs.getString("chats_widget", "[]") ?: "[]")
         } catch (_: Exception) {
@@ -126,6 +144,12 @@ class TinCanChatsWidgetProvider : AppWidgetProvider() {
         )
         for (id in ids) {
             val views = RemoteViews(context.packageName, R.layout.tin_can_widget_chats)
+            views.setInt(
+                R.id.chats_root, "setBackgroundResource",
+                if (dark) R.drawable.widget_bg_dark else R.drawable.widget_bg)
+            views.setTextColor(
+                R.id.chats_empty,
+                if (dark) Color.parseColor("#A39DBE") else Color.parseColor("#55506A"))
             for (i in slots.indices) {
                 if (i < arr.length()) {
                     val o = arr.getJSONObject(i)

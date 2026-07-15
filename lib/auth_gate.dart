@@ -639,7 +639,11 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.account_circle_outlined),
             tooltip: 'Konto',
             onSelected: (v) {
-              if (v == 'theme') setDarkMode(!appDarkMode.value);
+              if (v == 'theme') {
+                setDarkMode(!appDarkMode.value)
+                    // widżety na ekranie głównym też przełącz na nowy motyw
+                    .then((_) => refreshDrawingWidgets());
+              }
               if (v == 'logout') _supabase.auth.signOut();
               if (v == 'delete') _deleteAccount();
               if (v == 'chats_widget') _configChatsWidget();
