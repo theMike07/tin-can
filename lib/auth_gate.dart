@@ -1185,6 +1185,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   builder: (_) => DrawingScreen(
                     peerId: p.otherId,
                     peerLabel: p.label,
+                    connectionId: p.connectionId,
                   ),
                 ),
               );

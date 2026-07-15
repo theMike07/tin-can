@@ -218,12 +218,14 @@ class DrawingScreen extends StatefulWidget {
   final String? peerId; // 1:1: user_id drugiej osoby
   final String? groupId; // grupa: id grupy (wtedy peerId == null)
   final String peerLabel; // etykieta w pasku (osoba albo nazwa grupy)
+  final String? connectionId; // 1:1: id połączenia (do „usuń znajomego")
 
   const DrawingScreen({
     super.key,
     this.peerId,
     this.groupId,
     required this.peerLabel,
+    this.connectionId,
   });
 
   bool get isGroup => groupId != null;
@@ -844,65 +846,24 @@ class _DrawingScreenState extends State<DrawingScreen>
           ],
         ),
         actions: [
-          if (!widget.isGroup)
-            IconButton(
-              icon: const Icon(Icons.chat_bubble_outline),
-              tooltip: 'Czat',
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => ChatScreen(
-                    peerId: widget.peerId!,
-                    peerLabel: widget.peerLabel,
-                  ),
-                ),
-              ),
-            ),
-          IconButton(
-            icon: Badge(
-              isLabelVisible: _history.isNotEmpty,
-              label: Text('${_history.length}'),
-              child: const Icon(Icons.collections_outlined),
-            ),
-            onPressed: _openGallery,
-            tooltip: 'Historia',
-          ),
-          IconButton(
-            icon: const Icon(Icons.send),
-            onPressed: _send,
-            tooltip: 'Wyślij',
-          ),
-          PopupMenuButton<String>(
-            tooltip: 'Więcej',
-            onSelected: (v) {
-              if (v == 'speed') _openSpeedSheet();
-              if (v == 'clear') _clear();
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(
-                value: 'speed',
-                child: ListTile(
-                  leading: Icon(Icons.timer_outlined),
-                  title: Text('Czas odrysowywania'),
-                  contentPadding: EdgeInsets.zero,
-                ),
-              ),
-              PopupMenuItem(
-                value: 'clear',
-                child: ListTile(
-                  leading: Icon(Icons.delete_outline),
-                  title: Text('Wyczyść płótno'),
-                  contentPadding: EdgeInsets.zero,
-                ),
+          if (!widget.isGroup) _buildFriendMenu(),
+        ],
+        // Drugi pasek: funkcje sesji rysowania (Wyślij wyeksponowany na środku)
+        // + cienki pasek postępu materializacji pod spodem.
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(59),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildFunctionsBar(),
+              SizedBox(
+                height: 3,
+                child: _materializing
+                    ? LinearProgressIndicator(value: _reveal, minHeight: 3)
+                    : null,
               ),
             ],
           ),
-        ],
-        // Cienki pasek postępu — wypełnia się, gdy rysunek się materializuje.
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(3),
-          child: _materializing
-              ? LinearProgressIndicator(value: _reveal, minHeight: 3)
-              : const SizedBox(height: 3),
         ),
       ),
       bottomNavigationBar: _buildToolbar(),
@@ -1061,6 +1022,157 @@ class _DrawingScreenState extends State<DrawingScreen>
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+
+  // --- Górny pasek funkcji + menu znajomego ---
+
+  void _openChat() {
+    if (widget.peerId == null) return;
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) =>
+          ChatScreen(peerId: widget.peerId!, peerLabel: widget.peerLabel),
+    ));
+  }
+
+  void _pinWidget(bool tall) {
+    if (widget.peerId == null) return;
+    pinDrawingWidget(
+        peerId: widget.peerId!, label: widget.peerLabel, tall: tall);
+  }
+
+  Future<void> _removeFriend() async {
+    final connId = widget.connectionId;
+    if (connId == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Usunąć znajomego?'),
+        content: Text('Usunąć połączenie z ${widget.peerLabel}? '
+            'Rysunki zostaną w historii, ale nie wyślecie już nowych.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Anuluj')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: TC.coral600),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Usuń'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await supabase.rpc('remove_connection', params: {'conn_id': connId});
+      if (mounted) Navigator.of(context).pop(); // wróć do listy puszek
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Błąd: $e')));
+      }
+    }
+  }
+
+  // ⋮ przy nazwie — te same akcje co przy znajomym na liście.
+  Widget _buildFriendMenu() {
+    return PopupMenuButton<String>(
+      tooltip: 'Więcej',
+      onSelected: (v) {
+        if (v == 'chat') _openChat();
+        if (v == 'widget_sq') _pinWidget(false);
+        if (v == 'widget_tall') _pinWidget(true);
+        if (v == 'remove') _removeFriend();
+      },
+      itemBuilder: (_) => [
+        const PopupMenuItem(
+          value: 'chat',
+          child: ListTile(
+            leading: Icon(Icons.chat_bubble_outline),
+            title: Text('Napisz wiadomość'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        if (isAndroidApp) ...const [
+          PopupMenuItem(
+            value: 'widget_sq',
+            child: ListTile(
+              leading: Icon(Icons.crop_square),
+              title: Text('Widżet: rysunek (kwadrat)'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+          PopupMenuItem(
+            value: 'widget_tall',
+            child: ListTile(
+              leading: Icon(Icons.crop_portrait),
+              title: Text('Widżet: rysunek (pion)'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        ],
+        if (widget.connectionId != null)
+          const PopupMenuItem(
+              value: 'remove', child: Text('Usuń znajomego')),
+      ],
+    );
+  }
+
+  // Drugi pasek: czat · historia · [WYŚLIJ] · czas · kosz.
+  Widget _buildFunctionsBar() {
+    return Container(
+      height: 56,
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: TC.ink.withValues(alpha: 0.08))),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.chat_bubble_outline),
+            tooltip: 'Czat',
+            color: TC.inkSoft,
+            onPressed: widget.isGroup ? null : _openChat,
+          ),
+          IconButton(
+            icon: Badge(
+              isLabelVisible: _history.isNotEmpty,
+              label: Text('${_history.length}'),
+              child: const Icon(Icons.collections_outlined),
+            ),
+            tooltip: 'Historia',
+            color: TC.inkSoft,
+            onPressed: _openGallery,
+          ),
+          // WYŚLIJ — najbardziej wyeksponowany, na środku
+          Material(
+            color: TC.brand,
+            shape: const CircleBorder(),
+            elevation: 2,
+            shadowColor: TC.brand.withValues(alpha: 0.5),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: _send,
+              child: const Padding(
+                padding: EdgeInsets.all(12),
+                child: Icon(Icons.send, color: Colors.white, size: 24),
+              ),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.timer_outlined),
+            tooltip: 'Czas odrysowywania',
+            color: TC.inkSoft,
+            onPressed: _openSpeedSheet,
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Wyczyść',
+            color: TC.inkSoft,
+            onPressed: _clear,
+          ),
         ],
       ),
     );
