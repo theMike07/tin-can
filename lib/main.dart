@@ -6,6 +6,7 @@ import 'package:home_widget/home_widget.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'auth_gate.dart';
+import 'chat_screen.dart';
 import 'chime.dart';
 import 'logo.dart';
 import 'push.dart';
@@ -250,6 +251,14 @@ class _DrawingScreenState extends State<DrawingScreen>
   double _brushWidth = 4.0;
   bool _eraser = false;
 
+  // Wejście rysowania: surowe zdarzenia (Listener) zamiast gestów pan —
+  // kreska startuje DOKŁADNIE w punkcie dotknięcia, bez opóźnienia areny.
+  int? _activePointer;
+  Offset? _downPos;
+  bool _strokeStarted = false;
+  DateTime _lastTapUp = DateTime.fromMillisecondsSinceEpoch(0);
+  Offset? _lastTapPos;
+
   // Ile sekund ma trwać odrysowywanie (materializacja) odebranej wiadomości.
   // Ustawia ODBIORCA suwakiem — duże rysunki nie muszą już przelatywać w sekundę.
   double _redrawSeconds = 3.0;
@@ -273,6 +282,9 @@ class _DrawingScreenState extends State<DrawingScreen>
   ReceivedDrawing? _shownReceived;
   bool _heartBurst = false; // animacja serca przy polubieniu
   int _heartBurstId = 0;
+
+  // Streak: liczba kolejnych dni z interakcją (rysunek/wiadomość) z peerem.
+  int _streak = 0;
 
   // Nasłuch realtime na rysunki przychodzące do nas.
   RealtimeChannel? _channel;
@@ -307,6 +319,18 @@ class _DrawingScreenState extends State<DrawingScreen>
 
     _subscribe();
     _loadHistory();
+    _loadStreak();
+  }
+
+  // Wczytuje streak (kolejne dni z interakcją) — tylko dla czatów 1:1.
+  Future<void> _loadStreak() async {
+    if (widget.isGroup) return;
+    try {
+      final res = await supabase.rpc('get_streak', params: {'p_peer': peerId});
+      if (mounted && res is int) setState(() => _streak = res);
+    } catch (e) {
+      debugPrint('TINCAN_STREAK_ERROR: $e');
+    }
   }
 
   // Subskrybujemy INSERT-y do tabeli drawings, gdzie recipient == my.
@@ -587,6 +611,58 @@ class _DrawingScreenState extends State<DrawingScreen>
     });
   }
 
+  // --- Surowe wejście wskaźnika (bez opóźnienia gestów) ---
+
+  void _onPointerDown(PointerDownEvent e) {
+    final pos = e.localPosition;
+    // #5: dwuklik w odebrany rysunek = lajk (nie rozpoczyna kreski).
+    if (_shownReceived != null &&
+        _lastTapPos != null &&
+        DateTime.now().difference(_lastTapUp).inMilliseconds < 300 &&
+        (pos - _lastTapPos!).distance < 40) {
+      _lastTapPos = null;
+      _toggleLike();
+      return;
+    }
+    if (_activePointer != null) return; // rysujemy już jednym palcem
+    _activePointer = e.pointer;
+    _downPos = pos;
+    _strokeStarted = false;
+  }
+
+  void _onPointerMove(PointerMoveEvent e) {
+    if (e.pointer != _activePointer || _downPos == null) return;
+    final pos = e.localPosition;
+    if (!_strokeStarted) {
+      if ((pos - _downPos!).distance < 1.5) return; // czekaj na drgnięcie
+      _startStroke(_downPos!); // start dokładnie w punkcie dotknięcia
+      _strokeStarted = true;
+    }
+    _addPoint(pos);
+  }
+
+  void _onPointerUp(PointerUpEvent e) {
+    if (e.pointer != _activePointer) return;
+    if (_strokeStarted) {
+      _endStroke();
+    } else {
+      // stuknięcie bez rysowania — zapamiętaj do wykrycia dwukliku (lajk).
+      _lastTapUp = DateTime.now();
+      _lastTapPos = _downPos;
+    }
+    _activePointer = null;
+    _downPos = null;
+    _strokeStarted = false;
+  }
+
+  void _onPointerCancel(PointerCancelEvent e) {
+    if (e.pointer != _activePointer) return;
+    if (_strokeStarted) _endStroke();
+    _activePointer = null;
+    _downPos = null;
+    _strokeStarted = false;
+  }
+
   // Cofnij ostatnią kreskę (na stos redo).
   void _undo() {
     if (!_canUndo) return;
@@ -749,9 +825,38 @@ class _DrawingScreenState extends State<DrawingScreen>
             Flexible(
               child: Text(widget.peerLabel, overflow: TextOverflow.ellipsis),
             ),
+            if (_streak > 0) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: TC.coral.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text('🔥 $_streak',
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: TC.coral600)),
+              ),
+            ],
           ],
         ),
         actions: [
+          if (!widget.isGroup)
+            IconButton(
+              icon: const Icon(Icons.chat_bubble_outline),
+              tooltip: 'Czat',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ChatScreen(
+                    peerId: widget.peerId!,
+                    peerLabel: widget.peerLabel,
+                  ),
+                ),
+              ),
+            ),
           IconButton(
             icon: Badge(
               isLabelVisible: _history.isNotEmpty,
@@ -762,19 +867,34 @@ class _DrawingScreenState extends State<DrawingScreen>
             tooltip: 'Historia',
           ),
           IconButton(
-            icon: const Icon(Icons.timer_outlined),
-            onPressed: _openSpeedSheet,
-            tooltip: 'Czas odrysowywania',
-          ),
-          IconButton(
             icon: const Icon(Icons.send),
             onPressed: _send,
             tooltip: 'Wyślij',
           ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            onPressed: _clear,
-            tooltip: 'Wyczyść',
+          PopupMenuButton<String>(
+            tooltip: 'Więcej',
+            onSelected: (v) {
+              if (v == 'speed') _openSpeedSheet();
+              if (v == 'clear') _clear();
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'speed',
+                child: ListTile(
+                  leading: Icon(Icons.timer_outlined),
+                  title: Text('Czas odrysowywania'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: 'clear',
+                child: ListTile(
+                  leading: Icon(Icons.delete_outline),
+                  title: Text('Wyczyść płótno'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
           ),
         ],
         // Cienki pasek postępu — wypełnia się, gdy rysunek się materializuje.
@@ -788,12 +908,12 @@ class _DrawingScreenState extends State<DrawingScreen>
       bottomNavigationBar: _buildToolbar(),
       body: Stack(
         children: [
-          GestureDetector(
-            onPanStart: (details) => _startStroke(details.localPosition),
-            onPanUpdate: (details) => _addPoint(details.localPosition),
-            onPanEnd: (details) => _endStroke(),
-            // #5: dwuklik w odebrany rysunek = polub/odlub (serce).
-            onDoubleTap: _toggleLike,
+          Listener(
+            behavior: HitTestBehavior.opaque,
+            onPointerDown: _onPointerDown,
+            onPointerMove: _onPointerMove,
+            onPointerUp: _onPointerUp,
+            onPointerCancel: _onPointerCancel,
             child: Container(
               color: Colors.white,
               width: double.infinity,

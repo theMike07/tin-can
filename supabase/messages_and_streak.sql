@@ -1,0 +1,86 @@
+-- ============================================================
+--  Tin Can v1.2.3 — DMy (czat tekstowy) + streak
+--  Uruchom RAZ w Supabase → SQL Editor.
+-- ============================================================
+
+-- 1) Wiadomości tekstowe (DM 1:1). (Szyfrowanie E2E dodamy później.)
+create table if not exists public.messages (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  sender text not null,      -- user_id nadawcy
+  recipient text not null,   -- user_id odbiorcy
+  body text not null
+);
+
+alter table public.messages enable row level security;
+alter table public.messages replica identity full;
+
+-- select: tylko uczestnik rozmowy
+drop policy if exists "msg select" on public.messages;
+create policy "msg select" on public.messages
+  for select to authenticated
+  using (sender = auth.uid()::text or recipient = auth.uid()::text);
+
+-- insert: tylko jako własny nadawca i tylko do zaakceptowanego znajomego
+drop policy if exists "msg insert" on public.messages;
+create policy "msg insert" on public.messages
+  for insert to authenticated
+  with check (
+    sender = auth.uid()::text
+    and exists (
+      select 1 from public.connections c
+      where c.status = 'accepted'
+        and ((c.user_a::text = auth.uid()::text and c.user_b::text = recipient)
+          or (c.user_b::text = auth.uid()::text and c.user_a::text = recipient))
+    )
+  );
+
+-- realtime
+alter publication supabase_realtime add table public.messages;
+
+-- indeks pod historię rozmowy
+create index if not exists messages_pair_idx
+  on public.messages (sender, recipient, created_at);
+
+-- 2) Streak: liczba KOLEJNYCH dni z interakcją (rysunek LUB wiadomość) między
+--    zalogowanym a peerem. Streak żyje, jeśli ostatni dzień to dziś lub wczoraj.
+create or replace function public.get_streak(p_peer uuid)
+returns int
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  me   text := auth.uid()::text;
+  peer text := p_peer::text;
+  rec  record;
+  streak int := 0;
+  prev date := null;
+begin
+  if me is null then return 0; end if;
+  for rec in
+    select day from (
+      select created_at::date as day from public.drawings
+        where (sender = me and recipient = peer) or (sender = peer and recipient = me)
+      union
+      select created_at::date as day from public.messages
+        where (sender = me and recipient = peer) or (sender = peer and recipient = me)
+    ) t
+    group by day
+    order by day desc
+  loop
+    if prev is null then
+      if rec.day < current_date - 1 then return 0; end if; -- ostatnia interakcja > wczoraj
+      streak := 1;
+    elsif rec.day = prev - 1 then
+      streak := streak + 1;
+    else
+      exit; -- luka -> koniec streaka
+    end if;
+    prev := rec.day;
+  end loop;
+  return streak;
+end;
+$$;
+
+grant execute on function public.get_streak(uuid) to authenticated;

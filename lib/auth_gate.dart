@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'chat_screen.dart';
 import 'logo.dart';
 import 'main.dart';
 import 'push.dart';
@@ -1137,11 +1138,25 @@ class _HomeScreenState extends State<HomeScreen> {
             trailing: PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert, color: TC.inkSoft),
               onSelected: (v) {
+                if (v == 'chat') {
+                  Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => ChatScreen(
+                        peerId: p.otherId, peerLabel: p.label),
+                  ));
+                }
                 if (v == 'remove') _removeFriend(p.connectionId, p.label);
                 if (v == 'widget_sq') _pinDrawingWidget(p, tall: false);
                 if (v == 'widget_tall') _pinDrawingWidget(p, tall: true);
               },
               itemBuilder: (_) => [
+                const PopupMenuItem(
+                  value: 'chat',
+                  child: ListTile(
+                    leading: Icon(Icons.chat_bubble_outline),
+                    title: Text('Napisz wiadomość'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
                 if (isAndroidApp) ...const [
                   PopupMenuItem(
                     value: 'widget_sq',
