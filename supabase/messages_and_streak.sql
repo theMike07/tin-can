@@ -84,3 +84,42 @@ end;
 $$;
 
 grant execute on function public.get_streak(uuid) to authenticated;
+
+-- 3) Reakcje na wiadomości (podstawowy pakiet emoji). Jedna reakcja na osobę
+--    na wiadomość (zmiana = upsert, cofnięcie = delete).
+create table if not exists public.message_reactions (
+  message_id uuid not null references public.messages(id) on delete cascade,
+  user_id text not null,
+  emoji text not null,
+  created_at timestamptz not null default now(),
+  primary key (message_id, user_id)
+);
+
+alter table public.message_reactions enable row level security;
+alter table public.message_reactions replica identity full;
+
+-- select: reakcje na wiadomości z MOICH rozmów
+drop policy if exists "reac select" on public.message_reactions;
+create policy "reac select" on public.message_reactions
+  for select to authenticated
+  using (exists (
+    select 1 from public.messages m
+    where m.id = message_id
+      and (m.sender = auth.uid()::text or m.recipient = auth.uid()::text)
+  ));
+
+-- insert/update/delete: tylko własne reakcje i tylko w mojej rozmowie
+drop policy if exists "reac write" on public.message_reactions;
+create policy "reac write" on public.message_reactions
+  for all to authenticated
+  using (user_id = auth.uid()::text)
+  with check (
+    user_id = auth.uid()::text
+    and exists (
+      select 1 from public.messages m
+      where m.id = message_id
+        and (m.sender = auth.uid()::text or m.recipient = auth.uid()::text)
+    )
+  );
+
+alter publication supabase_realtime add table public.message_reactions;

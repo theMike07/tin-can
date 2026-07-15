@@ -20,6 +20,9 @@ class _ChatScreenState extends State<ChatScreen> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
   final List<Map<String, dynamic>> _messages = [];
+  // Reakcje: messageId -> (userId -> emoji). Jedna reakcja na osobę na wiadomość.
+  final Map<String, Map<String, String>> _reactions = {};
+  static const _reactionSet = ['❤️', '😂', '👍', '😮', '😢'];
   RealtimeChannel? _channel;
   bool _loading = true;
   bool _sending = false;
@@ -44,6 +47,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _messages
         ..clear()
         ..addAll((rows as List).cast<Map<String, dynamic>>());
+      await _loadReactions();
     } catch (e) {
       debugPrint('TINCAN_CHAT_LOAD_ERROR: $e');
     } finally {
@@ -73,7 +77,100 @@ class _ChatScreenState extends State<ChatScreen> {
             _scrollToEnd();
           },
         )
+        // Reakcje: RLS oddaje tylko reakcje z moich rozmów; filtrujemy po stronie
+        // klienta do wiadomości z tego czatu.
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'message_reactions',
+          callback: (payload) {
+            final isDelete = payload.eventType == PostgresChangeEvent.delete;
+            final rec = isDelete ? payload.oldRecord : payload.newRecord;
+            final mid = rec['message_id'] as String?;
+            final uid = rec['user_id'] as String?;
+            if (mid == null || uid == null) return;
+            if (!_messages.any((m) => m['id'] == mid)) return;
+            setState(() {
+              if (isDelete) {
+                _reactions[mid]?.remove(uid);
+              } else {
+                (_reactions[mid] ??= {})[uid] = (rec['emoji'] as String?) ?? '';
+              }
+            });
+          },
+        )
         .subscribe();
+  }
+
+  Future<void> _loadReactions() async {
+    final ids = _messages.map((m) => m['id'] as String).toList();
+    if (ids.isEmpty) return;
+    try {
+      final reacs = await supabase
+          .from('message_reactions')
+          .select('message_id, user_id, emoji')
+          .inFilter('message_id', ids);
+      _reactions.clear();
+      for (final r in (reacs as List)) {
+        final mid = r['message_id'] as String;
+        (_reactions[mid] ??= {})[r['user_id'] as String] =
+            r['emoji'] as String;
+      }
+    } catch (e) {
+      debugPrint('TINCAN_REACTIONS_LOAD_ERROR: $e');
+    }
+  }
+
+  // Ustaw / zmień / cofnij (ta sama = cofnięcie) reakcję na wiadomości.
+  Future<void> _react(String messageId, String emoji) async {
+    final current = _reactions[messageId]?[myId];
+    try {
+      if (current == emoji) {
+        await supabase
+            .from('message_reactions')
+            .delete()
+            .eq('message_id', messageId)
+            .eq('user_id', myId);
+        setState(() => _reactions[messageId]?.remove(myId));
+      } else {
+        await supabase.from('message_reactions').upsert(
+            {'message_id': messageId, 'user_id': myId, 'emoji': emoji});
+        setState(() => (_reactions[messageId] ??= {})[myId] = emoji);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Reakcja nie zadziałała: $e')));
+      }
+    }
+  }
+
+  void _openReactionPicker(String messageId) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              for (final e in _reactionSet)
+                InkWell(
+                  borderRadius: BorderRadius.circular(30),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _react(messageId, e);
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Text(e, style: const TextStyle(fontSize: 30)),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _send() async {
@@ -174,9 +271,17 @@ class _ChatScreenState extends State<ChatScreen> {
     final time = t != null
         ? '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}'
         : '';
+    final id = m['id'] as String?;
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
+      child: GestureDetector(
+        onLongPress: id != null ? () => _openReactionPicker(id) : null,
+        child: Column(
+          crossAxisAlignment:
+              mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
         margin: const EdgeInsets.symmetric(vertical: 3),
         padding: const EdgeInsets.fromLTRB(14, 9, 14, 7),
         constraints:
@@ -214,6 +319,32 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
       ),
+            if (id != null) _reactionChip(id),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Reakcje pod dymkiem (emoji obecnych reakcji; moja = obwódka fioletowa).
+  Widget _reactionChip(String messageId) {
+    final reacs = _reactions[messageId];
+    if (reacs == null || reacs.isEmpty) return const SizedBox.shrink();
+    final mine = reacs[myId];
+    return Container(
+      margin: const EdgeInsets.only(top: 1, bottom: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: Color.alphaBlend(Colors.white.withValues(alpha: 0.9), TC.paper),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: mine != null
+              ? TC.brand.withValues(alpha: 0.55)
+              : TC.ink.withValues(alpha: 0.1),
+        ),
+      ),
+      child: Text(reacs.values.join(' '),
+          style: const TextStyle(fontSize: 13)),
     );
   }
 

@@ -250,7 +250,7 @@ class _DrawingScreenState extends State<DrawingScreen>
 
   // Wybór pędzla.
   Color _brushColor = Colors.black;
-  double _brushWidth = 4.0;
+  double _brushWidth = 6.0; // domyślna grubość — zawsze ta sama przy wejściu
   bool _eraser = false;
 
   // Wejście rysowania: surowe zdarzenia (Listener) zamiast gestów pan —
@@ -1190,7 +1190,6 @@ class _DrawingScreenState extends State<DrawingScreen>
     Color(0xFF8E24AA),
     Color(0xFFEC407A),
   ];
-  static const List<double> _brushWidths = [2.0, 6.0, 12.0];
 
   Widget _buildToolbar() {
     return Container(
@@ -1245,7 +1244,7 @@ class _DrawingScreenState extends State<DrawingScreen>
                         margin: const EdgeInsets.symmetric(horizontal: 10),
                         color: TC.ink.withValues(alpha: 0.14),
                       ),
-                      for (final w in _brushWidths) _widthDot(w),
+                      _widthButton(),
                       const SizedBox(width: 4),
                       IconButton(
                         onPressed: () => setState(() => _eraser = !_eraser),
@@ -1291,34 +1290,82 @@ class _DrawingScreenState extends State<DrawingScreen>
     );
   }
 
-  Widget _widthDot(double w) {
-    final selected = !_eraser && _brushWidth == w;
-    return GestureDetector(
-      onTap: () => setState(() {
-        _brushWidth = w;
-        _eraser = false;
-      }),
+  // Przycisk grubości: kropka w rozmiarze aktualnej grubości -> otwiera suwak.
+  Widget _widthButton() {
+    final active = !_eraser;
+    final vis = _brushWidth.clamp(4.0, 26.0);
+    return InkWell(
+      onTap: _openWidthSheet,
+      borderRadius: BorderRadius.circular(20),
       child: Container(
-        width: 38,
-        height: 38,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: selected ? TC.brand : Colors.transparent,
-            width: 2,
-          ),
-        ),
-        child: Center(
-          child: Container(
-            width: w + 8,
-            height: w + 8,
-            decoration: const BoxDecoration(
-              color: TC.ink,
-              shape: BoxShape.circle,
-            ),
+        height: 40,
+        width: 44,
+        alignment: Alignment.center,
+        child: Container(
+          width: vis,
+          height: vis,
+          decoration: BoxDecoration(
+            color: active ? TC.ink : TC.inkSoft.withValues(alpha: 0.35),
+            shape: BoxShape.circle,
           ),
         ),
       ),
+    );
+  }
+
+  // Suwak grubości rysika (2–20, 10 stopni) — jak arkusz czasu odrysowywania.
+  void _openWidthSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheet) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Grubość rysika',
+                        style: Theme.of(ctx).textTheme.titleMedium),
+                    const SizedBox(height: 18),
+                    Center(
+                      child: Container(
+                        width: _brushWidth * 2 + 24,
+                        height: _brushWidth,
+                        decoration: BoxDecoration(
+                          color: _brushColor,
+                          borderRadius: BorderRadius.circular(_brushWidth),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Slider(
+                      min: 2,
+                      max: 20,
+                      divisions: 9,
+                      value: _brushWidth.clamp(2.0, 20.0),
+                      label: '${_brushWidth.round()} px',
+                      onChanged: (v) {
+                        setSheet(() {});
+                        setState(() {
+                          _brushWidth = v;
+                          _eraser = false;
+                        });
+                      },
+                    ),
+                    Center(
+                      child: Text('${_brushWidth.round()} px',
+                          style: Theme.of(ctx).textTheme.titleLarge),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }
