@@ -35,8 +35,17 @@ create policy "msg insert" on public.messages
     )
   );
 
--- realtime
-alter publication supabase_realtime add table public.messages;
+-- realtime (idempotentnie — dodaj tylko jeśli jeszcze nie jest w publikacji)
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public' and tablename = 'messages'
+  ) then
+    alter publication supabase_realtime add table public.messages;
+  end if;
+end $$;
 
 -- indeks pod historię rozmowy
 create index if not exists messages_pair_idx
@@ -122,4 +131,13 @@ create policy "reac write" on public.message_reactions
     )
   );
 
-alter publication supabase_realtime add table public.message_reactions;
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public' and tablename = 'message_reactions'
+  ) then
+    alter publication supabase_realtime add table public.message_reactions;
+  end if;
+end $$;
