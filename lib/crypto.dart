@@ -89,11 +89,17 @@ class E2E {
 
   /// Szyfruje tekst do rozmówcy. Zwraca base64 (nonce+cipher+mac) albo null,
   /// gdy nie da się zaszyfrować (brak klucza rozmówcy -> wyślij zwykły tekst).
-  static Future<String?> encrypt(String text, String? peerPubB64) async {
+  ///
+  /// `aad` (associated data) jest UWIERZYTELNIANE, ale nie szyfrowane — wiążemy
+  /// nim szyfrogram z parą nadawca>odbiorca, więc atakujący z dostępem do bazy
+  /// nie przeniesie szyfrogramu do innego wiersza/rozmowy bez wykrycia (MAC).
+  static Future<String?> encrypt(String text, String? peerPubB64,
+      {List<int> aad = const []}) async {
     final key = await _convKey(peerPubB64);
     if (key == null) return null;
     try {
-      final box = await _cipher.encrypt(utf8.encode(text), secretKey: key);
+      final box =
+          await _cipher.encrypt(utf8.encode(text), secretKey: key, aad: aad);
       return base64.encode(box.concatenation());
     } catch (e) {
       debugPrint('E2E_ENC_ERROR: $e');
@@ -101,18 +107,73 @@ class E2E {
     }
   }
 
-  /// Odszyfrowuje base64 blob. null = nie udało się (np. wiadomość zaszyfrowana
-  /// starym kluczem po reinstalacji) -> UI pokazuje kłódkę.
-  static Future<String?> decrypt(String blob, String? peerPubB64) async {
+  /// Odszyfrowuje base64 blob. null = nie udało się (zły klucz po reinstalacji,
+  /// albo naruszone aad/MAC = manipulacja) -> UI pokazuje kłódkę.
+  static Future<String?> decrypt(String blob, String? peerPubB64,
+      {List<int> aad = const []}) async {
     final key = await _convKey(peerPubB64);
     if (key == null) return null;
     try {
       final box = SecretBox.fromConcatenation(base64.decode(blob),
           nonceLength: _nonceLen, macLength: _macLen);
-      final clear = await _cipher.decrypt(box, secretKey: key);
+      final clear = await _cipher.decrypt(box, secretKey: key, aad: aad);
       return utf8.decode(clear);
     } catch (e) {
       debugPrint('E2E_DEC_ERROR: $e');
+      return null;
+    }
+  }
+
+  // --- Ochrona przed MITM / podmianą klucza na serwerze ---------------------
+
+  /// TOFU (trust-on-first-use): pamięta ostatnio widziany klucz publiczny
+  /// rozmówcy. Zwraca true, gdy klucz się ZMIENIŁ względem zapamiętanego
+  /// (reinstalacja rozmówcy albo — groźniejsze — podmiana przez serwer/MITM).
+  /// Pierwszy raz (brak zapisu) = zapamiętaj po cichu, bez ostrzeżenia.
+  static Future<bool> peerKeyChanged(String peerId, String? pubB64) async {
+    if (pubB64 == null || pubB64.isEmpty) return false;
+    try {
+      final prev = await _storage.read(key: 'peerkey_$peerId');
+      if (prev == null) {
+        await _storage.write(key: 'peerkey_$peerId', value: pubB64);
+        return false;
+      }
+      return prev != pubB64;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Zaakceptuj nowy klucz rozmówcy (po świadomym potwierdzeniu, że to była
+  /// reinstalacja, a nie atak) — od teraz jest traktowany jako zaufany.
+  static Future<void> trustPeerKey(String peerId, String? pubB64) async {
+    if (pubB64 == null || pubB64.isEmpty) return;
+    try {
+      await _storage.write(key: 'peerkey_$peerId', value: pubB64);
+    } catch (_) {}
+  }
+
+  /// „Numer bezpieczeństwa" — wspólny odcisk obu kluczy publicznych. Oboje
+  /// wyliczają ten sam (klucze sortowane), więc porównanie go poza apką (np. na
+  /// żywo/telefonicznie) wykrywa MITM: różny numer => ktoś jest w środku.
+  static Future<String?> safetyNumber(String? peerPubB64) async {
+    if (peerPubB64 == null || peerPubB64.isEmpty) return null;
+    try {
+      await _loadOrCreate();
+      if (_myPubB64 == null) return null;
+      final keys = [_myPubB64!, peerPubB64]..sort();
+      final digest =
+          await Sha256().hash(utf8.encode('tin-can-sn-v1|${keys.join('|')}'));
+      final b = digest.bytes;
+      // 12 grup po 5 cyfr z 24 bajtów skrótu (2 bajty -> 0..65535 -> 5 cyfr).
+      final groups = <String>[];
+      for (var i = 0; i < 24; i += 2) {
+        final n = (b[i] << 8) | b[i + 1];
+        groups.add(n.toString().padLeft(5, '0'));
+      }
+      return groups.join(' ');
+    } catch (e) {
+      debugPrint('E2E_SN_ERROR: $e');
       return null;
     }
   }

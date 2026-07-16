@@ -19,15 +19,15 @@ Future<SecretKey> convKey(SimpleKeyPair mine, SimplePublicKey peerPub) async {
   );
 }
 
-Future<String> enc(String text, SecretKey k) async {
-  final box = await _cipher.encrypt(utf8.encode(text), secretKey: k);
+Future<String> enc(String text, SecretKey k, {List<int> aad = const []}) async {
+  final box = await _cipher.encrypt(utf8.encode(text), secretKey: k, aad: aad);
   return base64.encode(box.concatenation());
 }
 
-Future<String> dec(String blob, SecretKey k) async {
+Future<String> dec(String blob, SecretKey k, {List<int> aad = const []}) async {
   final box = SecretBox.fromConcatenation(base64.decode(blob),
       nonceLength: 12, macLength: 16);
-  return utf8.decode(await _cipher.decrypt(box, secretKey: k));
+  return utf8.decode(await _cipher.decrypt(box, secretKey: k, aad: aad));
 }
 
 void main() {
@@ -49,6 +49,19 @@ void main() {
 
     // 3) B szyfruje -> A odszyfrowuje (własne wiadomości też widoczne).
     expect(await dec(await enc('drugi kierunek', keyB), keyA), 'drugi kierunek');
+  });
+
+  test('AAD wiąże szyfrogram z para nadawca>odbiorca', () async {
+    final a = await _x.newKeyPair();
+    final b = await _x.newKeyPair();
+    final k = await convKey(a, await b.extractPublicKey());
+    final aadAB = utf8.encode('A>B');
+    final blob = await enc('sekret', k, aad: aadAB);
+    // to samo aad -> OK
+    expect(await dec(blob, k, aad: aadAB), 'sekret');
+    // podmienione aad (np. atakujący zmienił sender/recipient w bazie) -> błąd
+    expect(() => dec(blob, k, aad: utf8.encode('B>A')),
+        throwsA(isA<Object>()));
   });
 
   test('Obcy klucz NIE odszyfrowuje (kłódka po reinstalacji)', () async {

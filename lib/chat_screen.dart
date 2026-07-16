@@ -44,6 +44,11 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _uploading = false;
   String? _peerAvatar; // zdjęcie profilowe rozmówcy (base64) do nagłówka
   String? _peerPubKey; // klucz publiczny rozmówcy (E2E); null = szyfrowanie off
+  bool _keyChanged = false; // klucz rozmówcy zmienił się od ostatniego razu
+
+  // AAD wiążące szyfrogram z kierunkiem nadawca>odbiorca (patrz E2E.encrypt).
+  List<int> _aad(String sender, String recipient) =>
+      utf8.encode('$sender>$recipient');
 
   @override
   void initState() {
@@ -71,9 +76,14 @@ class _ChatScreenState extends State<ChatScreen> {
           .eq('id', widget.peerId)
           .maybeSingle();
       if (mounted && row != null) {
+        final pub = row['public_key'] as String?;
+        // Wykryj podmianę/rotację klucza rozmówcy PRZED zaufaniem mu.
+        final changed = await E2E.peerKeyChanged(widget.peerId, pub);
+        if (!mounted) return;
         setState(() {
           _peerAvatar = row['avatar_url'] as String?;
-          _peerPubKey = row['public_key'] as String?;
+          _peerPubKey = pub;
+          _keyChanged = changed;
         });
       }
     } catch (_) {}
@@ -83,7 +93,10 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _decryptRow(Map<String, dynamic> m) async {
     final enc = m['enc'] as String?;
     if (enc == null || enc.isEmpty) return; // zwykły tekst / obrazek
-    final text = await E2E.decrypt(enc, _peerPubKey);
+    final sender = (m['sender'] as String?) ?? '';
+    final recipient = (m['recipient'] as String?) ?? '';
+    final text =
+        await E2E.decrypt(enc, _peerPubKey, aad: _aad(sender, recipient));
     if (text != null) {
       m['body'] = text;
     } else {
@@ -270,7 +283,8 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       // E2E: gdy rozmówca ma klucz publiczny — szyfrujemy, body puste.
       // Bez klucza (albo starsza wersja u rozmówcy) — zwykły tekst.
-      final enc = await E2E.encrypt(text, _peerPubKey);
+      final enc = await E2E.encrypt(text, _peerPubKey,
+          aad: _aad(myId, widget.peerId));
       final payload = <String, dynamic>{
         'sender': myId,
         'recipient': widget.peerId,
@@ -357,6 +371,132 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  // Baner ostrzegawczy: klucz rozmówcy się zmienił (reinstalacja albo MITM).
+  Widget _keyChangedBanner() {
+    return Material(
+      color: TC.coral.withValues(alpha: 0.14),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+        child: Row(
+          children: [
+            const Icon(Icons.gpp_maybe, color: TC.coral600, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Klucz szyfrowania ${widget.peerLabel} się zmienił. Jeśli to była '
+                'reinstalacja/nowy telefon — OK. Jeśli nie — zweryfikujcie numer '
+                'bezpieczeństwa, zanim zaufasz.',
+                style: TextStyle(fontSize: 12.5, color: TC.ink),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                E2E.trustPeerKey(widget.peerId, _peerPubKey);
+                setState(() => _keyChanged = false);
+              },
+              child: const Text('Zaufaj'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Ekran/arkusz „Szyfrowanie": stan E2E + numer bezpieczeństwa do porównania.
+  void _openEncryptionInfo() {
+    final encrypted = _peerPubKey != null && _peerPubKey!.isNotEmpty;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(encrypted ? Icons.lock : Icons.lock_open,
+                      color: encrypted ? TC.brand : TC.inkSoft, size: 22),
+                  const SizedBox(width: 8),
+                  Text('Szyfrowanie end-to-end',
+                      style: Theme.of(ctx).textTheme.titleMedium),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                encrypted
+                    ? 'Wiadomości tekstowe z ${widget.peerLabel} są szyfrowane '
+                        'na Waszych telefonach. Serwer nie widzi treści.\n\n'
+                        'Porównajcie ten numer bezpieczeństwa na obu telefonach '
+                        '(np. na żywo). Jeśli jest identyczny — nikt nie jest w '
+                        'środku. Różny numer = ktoś może podsłuchiwać.'
+                    : '${widget.peerLabel} nie ma jeszcze klucza szyfrowania '
+                        '(starsza wersja apki). Wiadomości idą na razie zwykłym '
+                        'tekstem — poproś o aktualizację.',
+                style: TextStyle(fontSize: 13, color: TC.inkSoft, height: 1.35),
+              ),
+              if (encrypted) ...[
+                const SizedBox(height: 16),
+                FutureBuilder<String?>(
+                  future: E2E.safetyNumber(_peerPubKey),
+                  builder: (c, snap) {
+                    if (!snap.hasData) {
+                      return const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        child: Center(
+                            child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2))),
+                      );
+                    }
+                    return Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: TC.fieldFill,
+                        borderRadius: BorderRadius.circular(14),
+                        border:
+                            Border.all(color: TC.ink.withValues(alpha: 0.1)),
+                      ),
+                      child: Text(
+                        snap.data!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontFamily: kFontMono,
+                          fontSize: 16,
+                          letterSpacing: 1.5,
+                          height: 1.6,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
+              if (_keyChanged) ...[
+                const SizedBox(height: 14),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton.tonal(
+                    onPressed: () {
+                      E2E.trustPeerKey(widget.peerId, _peerPubKey);
+                      setState(() => _keyChanged = false);
+                      Navigator.pop(ctx);
+                    },
+                    child: const Text('Zaufaj nowemu kluczowi'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   void _scrollToEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) {
@@ -394,10 +534,21 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ],
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Szyfrowanie',
+            icon: Icon(
+              _keyChanged ? Icons.gpp_maybe : Icons.verified_user_outlined,
+              color: _keyChanged ? TC.coral600 : TC.inkSoft,
+            ),
+            onPressed: _openEncryptionInfo,
+          ),
+        ],
       ),
       body: PaperBackground(
         child: Column(
           children: [
+            if (_keyChanged) _keyChangedBanner(),
             Expanded(
               child: _loading
                   ? const Center(child: CircularProgressIndicator())

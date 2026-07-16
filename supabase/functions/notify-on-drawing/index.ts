@@ -103,6 +103,16 @@ async function pushToUser(
 
 Deno.serve(async (req) => {
   try {
+    // Zabezpieczenie przed nadużyciem: klucz anon jest w apce, więc funkcja jest
+    // wołalna z zewnątrz — bez tego ktoś mógłby spamować powiadomienia. Gdy
+    // ustawisz sekret TC_WEBHOOK_SECRET (env funkcji) i dodasz nagłówek
+    // x-tc-secret w webhookach/triggerach, żądania bez niego są odrzucane.
+    // Fail-open, gdy sekret nieustawiony (zgodność wsteczna — włącz, gdy gotowe).
+    const secret = Deno.env.get("TC_WEBHOOK_SECRET");
+    if (secret && req.headers.get("x-tc-secret") !== secret) {
+      return new Response("forbidden", { status: 401 });
+    }
+
     const payload = await req.json();
     const type = (payload.type as string | undefined) ?? "INSERT";
     const table = (payload.table as string | undefined) ?? "drawings";
