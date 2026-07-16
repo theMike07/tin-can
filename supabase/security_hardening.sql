@@ -98,3 +98,58 @@ update storage.buckets
 --    linkiem obejrzy obrazek/GIF. Docelowo bucket prywatny + signed URL
 --    (z wygasaniem) albo szyfrowanie obrazków (kolejny etap E2E). Świadomie.
 -- ------------------------------------------------------------
+
+-- ------------------------------------------------------------
+-- 5) create_group — dodawaj do grupy TYLKO zaakceptowanych znajomych.
+--    Było: można było wrzucić do grupy dowolne user_id (spam rysunkami do
+--    osoby, która nie jest znajomym). Teraz członek musi być Twoim
+--    zaakceptowanym połączeniem. Przetestuj tworzenie grupy po zmianie.
+-- ------------------------------------------------------------
+create or replace function public.create_group(p_name text, p_member_ids uuid[])
+ returns uuid
+ language plpgsql
+ security definer
+ set search_path to 'public'
+as $function$
+declare me uuid := auth.uid(); gid uuid; mid uuid;
+begin
+  if me is null then return null; end if;
+  insert into public.groups (name, owner_id) values (trim(p_name), me) returning id into gid;
+  insert into public.group_members (group_id, user_id) values (gid, me) on conflict do nothing;
+  if p_member_ids is not null then
+    foreach mid in array p_member_ids loop
+      -- tylko zaakceptowany znajomy twórcy
+      if exists (
+        select 1 from public.connections c
+        where c.status = 'accepted'
+          and ((c.user_a = me and c.user_b = mid) or (c.user_b = me and c.user_a = mid))
+      ) then
+        insert into public.group_members (group_id, user_id) values (gid, mid) on conflict do nothing;
+      end if;
+    end loop;
+  end if;
+  return gid;
+end $function$;
+
+-- ------------------------------------------------------------
+-- 6) set_public_key — limit długości (poprawny klucz X25519 b64 to ~44 znaki).
+--    Chroni przed wrzuceniem gigantycznego „klucza" bloatującego profil.
+-- ------------------------------------------------------------
+create or replace function public.set_public_key(p_key text)
+ returns void
+ language sql
+ security definer
+ set search_path to 'public'
+as $function$
+  update public.profiles set public_key = p_key
+   where id = auth.uid()
+     and (p_key is null or length(p_key) <= 100);
+$function$;
+
+-- ------------------------------------------------------------
+-- 7) (OPCJONALNIE, kosmetyka) po sekcjach 1–2 masz PODWÓJNE polityki —
+--    Twoje istniejące już zamykały dostęp, więc moje z sekcji 1–2 są
+--    zbędne (nieszkodliwe). Możesz je usunąć, żeby było czysto:
+-- drop policy if exists "dt owner all" on public.device_tokens;              -- zostaw "own device tokens"
+-- drop policy if exists "profiles select self+connections" on public.profiles; -- zostaw "read own or connected profile"
+-- ------------------------------------------------------------
