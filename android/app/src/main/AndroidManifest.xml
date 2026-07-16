@@ -40,24 +40,13 @@
         <receiver
             android:name=".TinCanDrawingWidgetProvider"
             android:exported="false"
-            android:label="Tin Can — rysunek (kwadrat)">
+            android:label="Tin Can — rysunek">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/tin_can_widget_square_info" />
-        </receiver>
-        <receiver
-            android:name=".TinCanDrawingWidgetTallProvider"
-            android:exported="false"
-            android:label="Tin Can — rysunek (pion)">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/tin_can_widget_tall_info" />
         </receiver>
         <receiver
             android:name=".TinCanChatsWidgetProvider"

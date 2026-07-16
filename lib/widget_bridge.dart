@@ -16,10 +16,9 @@ import 'theme.dart' show adaptiveInkFor;
 // ---------------------------------------------------------------------------
 //  Widżety ekranu głównego (Android): most Dart <-> AppWidgetProvider.
 //
-//  Trzy widżety (Kotlin, android/app/src/main/kotlin/...):
+//  Dwa widżety (Kotlin, android/app/src/main/kotlin/...):
 //   - TinCanChatsWidgetProvider        — pasek skrótów do czatów (ikonki osób),
-//   - TinCanDrawingWidgetProvider      — ostatni rysunek OD osoby (kwadrat),
-//   - TinCanDrawingWidgetTallProvider  — jak wyżej, pionowy prostokąt.
+//   - TinCanDrawingWidgetProvider      — ostatni rysunek OD osoby (kwadrat).
 //
 //  Dane wymieniamy przez SharedPreferences home_widget:
 //   - widget_people           JSON [{id,label}] — osoby, dla których renderujemy,
@@ -37,7 +36,6 @@ import 'theme.dart' show adaptiveInkFor;
 bool get isAndroidApp => !kIsWeb && Platform.isAndroid;
 
 const _qualifiedSquare = 'com.example.tin_can.TinCanDrawingWidgetProvider';
-const _qualifiedTall = 'com.example.tin_can.TinCanDrawingWidgetTallProvider';
 const _qualifiedChats = 'com.example.tin_can.TinCanChatsWidgetProvider';
 
 String _fmtTime(DateTime t) {
@@ -172,7 +170,6 @@ Future<void> _refreshPerson(
 // Prosi providery o przerysowanie.
 Future<void> _pushUpdate() async {
   await HomeWidget.updateWidget(qualifiedAndroidName: _qualifiedSquare);
-  await HomeWidget.updateWidget(qualifiedAndroidName: _qualifiedTall);
   await HomeWidget.updateWidget(qualifiedAndroidName: _qualifiedChats);
 }
 
@@ -220,12 +217,11 @@ Future<void> refreshDrawingWidgets() async {
 }
 
 /// Konfiguruje NOWĄ instancję widżetu rysunku dla osoby i prosi launcher
-/// o przypięcie. `tall` = wariant pionowy. Provider przejmie konfigurację
-/// (pending) przy pierwszym odświeżeniu instancji.
+/// o przypięcie. Provider przejmie konfigurację (pending) przy pierwszym
+/// odświeżeniu instancji.
 Future<void> pinDrawingWidget({
   required String peerId,
   required String label,
-  required bool tall,
 }) async {
   if (!isAndroidApp) return;
   try {
@@ -238,9 +234,7 @@ Future<void> pinDrawingWidget({
     await HomeWidget.saveWidgetData<String>(
         'pending_widget_person', jsonEncode({'id': peerId, 'label': label}));
     await refreshDrawingWidgets(); // obraz gotowy zanim widżet się pojawi
-    await HomeWidget.requestPinWidget(
-      qualifiedAndroidName: tall ? _qualifiedTall : _qualifiedSquare,
-    );
+    await HomeWidget.requestPinWidget(qualifiedAndroidName: _qualifiedSquare);
   } catch (e) {
     debugPrint('TINCAN_WIDGET_PIN_ERROR: $e');
   }

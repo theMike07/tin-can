@@ -25,7 +25,7 @@ private fun chatIntent(context: Context, peerId: String, label: String): Pending
     return HomeWidgetLaunchIntent.getActivity(context, MainActivity::class.java, uri)
 }
 
-// --- Widżet z rysunkiem (kwadrat i pion współdzielą logikę i layout). -------
+// --- Widżet z rysunkiem (kwadrat). ------------------------------------------
 abstract class BaseDrawingWidget : AppWidgetProvider() {
     override fun onUpdate(
         context: Context,
@@ -34,11 +34,14 @@ abstract class BaseDrawingWidget : AppWidgetProvider() {
     ) {
         val prefs = HomeWidgetPlugin.getData(context)
         // Motyw z apki: kolor płótna (jak w czacie rysunkowym) + tryb ciemny.
+        // Płótno = jeden z 4 znanych kolorów -> gotowy ZAOKRĄGLONY drawable
+        // (setBackgroundColor gubił zaokrąglenie rogów).
         val dark = prefs.getBoolean("widget_dark", false)
-        val canvasColor = try {
-            Color.parseColor(prefs.getString("widget_canvas", "#FFFFFF"))
-        } catch (_: Exception) {
-            Color.WHITE
+        val canvasRes = when (prefs.getString("widget_canvas", "#fbf8f1")?.lowercase()) {
+            "#ffffff" -> R.drawable.widget_canvas_bg
+            "#14101f" -> R.drawable.widget_canvas_night
+            "#000000" -> R.drawable.widget_canvas_black
+            else -> R.drawable.widget_canvas_paper
         }
         val captionColor = if (dark) Color.parseColor("#A39DBE") else Color.parseColor("#55506A")
         for (id in ids) {
@@ -62,7 +65,7 @@ abstract class BaseDrawingWidget : AppWidgetProvider() {
             views.setInt(
                 R.id.widget_root, "setBackgroundResource",
                 if (dark) R.drawable.widget_bg_dark else R.drawable.widget_bg)
-            views.setInt(R.id.widget_canvas, "setBackgroundColor", canvasColor)
+            views.setInt(R.id.widget_canvas, "setBackgroundResource", canvasRes)
             views.setTextColor(R.id.widget_caption, captionColor)
             views.setTextColor(R.id.widget_empty, captionColor)
             var configured = false
@@ -118,7 +121,6 @@ abstract class BaseDrawingWidget : AppWidgetProvider() {
 }
 
 class TinCanDrawingWidgetProvider : BaseDrawingWidget()
-class TinCanDrawingWidgetTallProvider : BaseDrawingWidget()
 
 // --- Pasek "szybkie czaty": do 5 ikonek, każda otwiera czat z osobą. --------
 class TinCanChatsWidgetProvider : AppWidgetProvider() {

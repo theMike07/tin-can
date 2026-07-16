@@ -950,8 +950,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // Przypnij widżet z rysunkiem OD tej osoby (kwadrat/pion) na ekran główny.
-  Future<void> _pinDrawingWidget(Puszka p, {required bool tall}) async {
-    await pinDrawingWidget(peerId: p.otherId, label: p.label, tall: tall);
+  Future<void> _pinDrawingWidget(Puszka p) async {
+    await pinDrawingWidget(peerId: p.otherId, label: p.label);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text(
@@ -1176,8 +1176,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ));
                 }
                 if (v == 'remove') _removeFriend(p.connectionId, p.label);
-                if (v == 'widget_sq') _pinDrawingWidget(p, tall: false);
-                if (v == 'widget_tall') _pinDrawingWidget(p, tall: true);
+                if (v == 'widget_sq') _pinDrawingWidget(p);
               },
               itemBuilder: (_) => [
                 const PopupMenuItem(
@@ -1188,24 +1187,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
-                if (isAndroidApp) ...const [
-                  PopupMenuItem(
+                if (isAndroidApp)
+                  const PopupMenuItem(
                     value: 'widget_sq',
                     child: ListTile(
                       leading: Icon(Icons.crop_square),
-                      title: Text('Widżet: rysunek (kwadrat)'),
+                      title: Text('Widżet: rysunek'),
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
-                  PopupMenuItem(
-                    value: 'widget_tall',
-                    child: ListTile(
-                      leading: Icon(Icons.crop_portrait),
-                      title: Text('Widżet: rysunek (pion)'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                ],
                 const PopupMenuItem(
                     value: 'remove', child: Text('Usuń znajomego')),
               ],

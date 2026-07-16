@@ -1281,10 +1281,9 @@ class _DrawingScreenState extends State<DrawingScreen>
         .then((_) => _loadUnreadMsgs());
   }
 
-  void _pinWidget(bool tall) {
+  void _pinWidget() {
     if (widget.peerId == null) return;
-    pinDrawingWidget(
-        peerId: widget.peerId!, label: widget.peerLabel, tall: tall);
+    pinDrawingWidget(peerId: widget.peerId!, label: widget.peerLabel);
   }
 
   Future<void> _removeFriend() async {
@@ -1327,8 +1326,7 @@ class _DrawingScreenState extends State<DrawingScreen>
       onSelected: (v) {
         if (v == 'canvas') _openCanvasColorSheet();
         if (v == 'chat') _openChat();
-        if (v == 'widget_sq') _pinWidget(false);
-        if (v == 'widget_tall') _pinWidget(true);
+        if (v == 'widget_sq') _pinWidget();
         if (v == 'remove') _removeFriend();
       },
       itemBuilder: (_) => [
@@ -1349,24 +1347,15 @@ class _DrawingScreenState extends State<DrawingScreen>
               contentPadding: EdgeInsets.zero,
             ),
           ),
-        if (isAndroidApp && !widget.isGroup) ...const [
-          PopupMenuItem(
+        if (isAndroidApp && !widget.isGroup)
+          const PopupMenuItem(
             value: 'widget_sq',
             child: ListTile(
               leading: Icon(Icons.crop_square),
-              title: Text('Widżet: rysunek (kwadrat)'),
+              title: Text('Widżet: rysunek'),
               contentPadding: EdgeInsets.zero,
             ),
           ),
-          PopupMenuItem(
-            value: 'widget_tall',
-            child: ListTile(
-              leading: Icon(Icons.crop_portrait),
-              title: Text('Widżet: rysunek (pion)'),
-              contentPadding: EdgeInsets.zero,
-            ),
-          ),
-        ],
         if (widget.connectionId != null)
           const PopupMenuItem(
               value: 'remove', child: Text('Usuń znajomego')),
