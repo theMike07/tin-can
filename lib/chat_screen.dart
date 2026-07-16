@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -615,6 +616,38 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  // Wstawianie emotek do wiadomości — pełna biblioteka, arkusz zostaje otwarty
+  // (można wstawić kilka pod rząd).
+  void _openEmojiInsert() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SizedBox(
+        height: 320,
+        child: EmojiPicker(
+          onEmojiSelected: (category, emoji) {
+            _input.text += emoji.emoji;
+            _input.selection =
+                TextSelection.collapsed(offset: _input.text.length);
+          },
+          config: Config(
+            height: 320,
+            emojiViewConfig: EmojiViewConfig(
+              backgroundColor: TC.paper,
+              emojiSizeMax: 26,
+            ),
+            categoryViewConfig: CategoryViewConfig(
+              backgroundColor: TC.paper,
+              indicatorColor: TC.brand,
+              iconColorSelected: TC.brand,
+            ),
+            bottomActionBarConfig: const BottomActionBarConfig(enabled: false),
+            searchViewConfig: SearchViewConfig(backgroundColor: TC.paper),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _inputBar() {
     return SafeArea(
       top: false,
@@ -641,6 +674,12 @@ class _ChatScreenState extends State<ChatScreen> {
                     tooltip: 'Wyślij obrazek / GIF',
                     color: TC.inkSoft,
                   ),
+            IconButton(
+              onPressed: _openEmojiInsert,
+              icon: const Icon(Icons.emoji_emotions_outlined),
+              tooltip: 'Emotki',
+              color: TC.inkSoft,
+            ),
             Expanded(
               child: TextField(
                 controller: _input,

@@ -311,6 +311,15 @@ class _DrawingScreenState extends State<DrawingScreen>
   // Emotka dołączana do powiadomienia push u odbiorcy („X przysłał Ci rysunek ❤️").
   String _notifEmoji = '🥫';
 
+  // Pomarańczowe „oczka": NOWE rysunki od ostatniego wejścia w historię
+  // i nieprzeczytane wiadomości DM. 0 = ikona czysta.
+  int _histNew = 0;
+  int _unreadMsgs = 0;
+  static const _badgeOrange = Color(0xFFFB8C00);
+
+  String get _seenKey =>
+      'hist_seen_${widget.groupId ?? widget.peerId ?? 'x'}';
+
   // Ile sekund ma trwać odrysowywanie (materializacja) odebranej wiadomości.
   // Ustawia ODBIORCA suwakiem — duże rysunki nie muszą już przelatywać w sekundę.
   double _redrawSeconds = 3.0;
@@ -382,6 +391,57 @@ class _DrawingScreenState extends State<DrawingScreen>
       }
     });
     _loadPeerAvatar();
+    _loadUnreadMsgs();
+  }
+
+  // Liczba nieprzeczytanych wiadomości DM od tej osoby (oczko na ikonie czatu).
+  // Przed migracją read_at zapytanie się nie powiedzie — wtedy bez oczka.
+  Future<void> _loadUnreadMsgs() async {
+    if (widget.peerId == null) return;
+    try {
+      final rows = await supabase
+          .from('messages')
+          .select('id')
+          .eq('sender', widget.peerId!)
+          .eq('recipient', myId)
+          .isFilter('read_at', null);
+      if (mounted) setState(() => _unreadMsgs = (rows as List).length);
+    } catch (_) {}
+  }
+
+  // Ile rysunków przyszło od ostatniego zajrzenia w historię (oczko galerii).
+  Future<void> _refreshHistBadge() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final seen =
+          DateTime.fromMillisecondsSinceEpoch(p.getInt(_seenKey) ?? 0);
+      final n = _history
+          .where((d) => !d.outgoing && d.createdAt.isAfter(seen))
+          .length;
+      if (mounted) setState(() => _histNew = n);
+    } catch (_) {}
+  }
+
+  // Statystyki 1:1: ile rysunków wysłało każde z was i łącznie.
+  Future<List<MapEntry<String, int>>> _loadStats() async {
+    final rows = await supabase
+        .from('drawings')
+        .select('sender')
+        .or('and(sender.eq.$myId,recipient.eq.${widget.peerId}),'
+            'and(sender.eq.${widget.peerId},recipient.eq.$myId)');
+    var mine = 0, theirs = 0;
+    for (final r in rows as List) {
+      if (r['sender'] == myId) {
+        mine++;
+      } else {
+        theirs++;
+      }
+    }
+    return [
+      MapEntry('Ty', mine),
+      MapEntry(widget.peerLabel, theirs),
+      MapEntry('Łącznie', mine + theirs),
+    ];
   }
 
   // Awatar rozmówcy do nagłówka (tylko 1:1). Odporny na brak kolumny/wiersza.
@@ -482,6 +542,7 @@ class _DrawingScreenState extends State<DrawingScreen>
       debugPrint('TINCAN_HISTORY_ERROR: $e');
     } finally {
       if (mounted) setState(() => _historyLoading = false);
+      _refreshHistBadge();
     }
   }
 
@@ -545,6 +606,7 @@ class _DrawingScreenState extends State<DrawingScreen>
     }
 
     setState(() => _history.insert(0, received));
+    _refreshHistBadge(); // nowy rysunek -> pomarańczowe oczko na historii
 
     // #4: jeśli rysuję właśnie swoje (niewysłane) — odłóż je do kieszeni,
     // pokaż normalnie przychodzący rysunek, a MÓJ da się przywrócić ikoną.
@@ -888,11 +950,18 @@ class _DrawingScreenState extends State<DrawingScreen>
 
   // Galeria odebranych rysunków — klik miniatury odtwarza ją na płótnie.
   Future<void> _openGallery() async {
+    // Wejście w historię = „widziane": oczko znika, licznik rusza od teraz.
+    SharedPreferences.getInstance().then(
+        (p) => p.setInt(_seenKey, DateTime.now().millisecondsSinceEpoch));
+    setState(() => _histNew = 0);
     final picked = await Navigator.of(context).push<ReceivedDrawing>(
       MaterialPageRoute(
         builder: (_) => GalleryScreen(
           history: _history,
           loading: _historyLoading,
+          stats: (!widget.isGroup && widget.peerId != null)
+              ? _loadStats()
+              : null,
         ),
       ),
     );
@@ -949,7 +1018,7 @@ class _DrawingScreenState extends State<DrawingScreen>
         // Drugi pasek: funkcje sesji rysowania (Wyślij wyeksponowany na środku)
         // + cienki pasek postępu materializacji pod spodem.
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(59),
+          preferredSize: const Size.fromHeight(67),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1054,6 +1123,35 @@ class _DrawingScreenState extends State<DrawingScreen>
                       style: const TextStyle(color: Colors.white, fontSize: 14),
                     ),
                   ),
+                ),
+              ),
+            ),
+          ),
+          // Emotka powiadomienia — lewy dolny róg, w stylu przycisku serca.
+          // Tap = wybór z pełnej biblioteki; przytrzymanie = baner „co to jest".
+          Positioned(
+            left: 16,
+            bottom: 16,
+            child: GestureDetector(
+              onTap: _openNotifEmojiSheet,
+              onLongPress: _showNotifEmojiBanner,
+              child: Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: TC.ink.withValues(alpha: 0.15),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Text(
+                  _notifEmoji,
+                  style: const TextStyle(
+                      fontFamily: 'Roboto', fontSize: 22, height: 1.0),
                 ),
               ),
             ),
@@ -1174,10 +1272,13 @@ class _DrawingScreenState extends State<DrawingScreen>
 
   void _openChat() {
     if (widget.peerId == null) return;
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) =>
-          ChatScreen(peerId: widget.peerId!, peerLabel: widget.peerLabel),
-    ));
+    Navigator.of(context)
+        .push(MaterialPageRoute(
+          builder: (_) =>
+              ChatScreen(peerId: widget.peerId!, peerLabel: widget.peerLabel),
+        ))
+        // po powrocie z czatu wiadomości są przeczytane -> oczko znika
+        .then((_) => _loadUnreadMsgs());
   }
 
   void _pinWidget(bool tall) {
@@ -1225,7 +1326,6 @@ class _DrawingScreenState extends State<DrawingScreen>
       tooltip: 'Więcej',
       onSelected: (v) {
         if (v == 'canvas') _openCanvasColorSheet();
-        if (v == 'emoji') _openNotifEmojiSheet();
         if (v == 'chat') _openChat();
         if (v == 'widget_sq') _pinWidget(false);
         if (v == 'widget_tall') _pinWidget(true);
@@ -1237,14 +1337,6 @@ class _DrawingScreenState extends State<DrawingScreen>
           child: ListTile(
             leading: Icon(Icons.palette_outlined),
             title: Text('Kolor płótna'),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-        PopupMenuItem(
-          value: 'emoji',
-          child: ListTile(
-            leading: const Icon(Icons.emoji_emotions_outlined),
-            title: Text('Emotka powiadomienia   $_notifEmoji'),
             contentPadding: EdgeInsets.zero,
           ),
         ),
@@ -1280,6 +1372,29 @@ class _DrawingScreenState extends State<DrawingScreen>
               value: 'remove', child: Text('Usuń znajomego')),
       ],
     );
+  }
+
+  // Baner tłumaczący guzik emotki (długie przytrzymanie).
+  void _showNotifEmojiBanner() {
+    final m = ScaffoldMessenger.of(context);
+    m.clearMaterialBanners();
+    m.showMaterialBanner(
+      MaterialBanner(
+        leading: Text(_notifEmoji,
+            style: const TextStyle(fontFamily: 'Roboto', fontSize: 26)),
+        content: const Text(
+            'Ta emotka poleci z powiadomieniem o Twoim rysunku — odbiorca '
+            'zobaczy ją obok „przysłał(a) Ci rysunek”. Stuknij guzik, by ją zmienić.'),
+        actions: [
+          TextButton(
+              onPressed: m.hideCurrentMaterialBanner,
+              child: const Text('OK')),
+        ],
+      ),
+    );
+    Future.delayed(const Duration(seconds: 7), () {
+      if (mounted) ScaffoldMessenger.of(context).clearMaterialBanners();
+    });
   }
 
   // Pełna biblioteka emoji (tekst Unicode, systemowy font — zero assetów).
@@ -1427,26 +1542,54 @@ class _DrawingScreenState extends State<DrawingScreen>
     );
   }
 
-  // Drugi pasek: czat · historia · [WYŚLIJ] · czas · kosz.
+  // Miękka fioletowa poświata pod pływającymi paskami — jak glowy ze stron WWW.
+  List<BoxShadow> get _barGlow => [
+        BoxShadow(
+          color: TC.brand.withValues(alpha: TC.dark ? 0.40 : 0.28),
+          blurRadius: 26,
+          offset: const Offset(0, 8),
+          spreadRadius: -6,
+        ),
+        BoxShadow(
+          color: TC.ink.withValues(alpha: 0.08),
+          blurRadius: 4,
+          offset: const Offset(0, 1),
+        ),
+      ];
+
+  // Drugi pasek: czat · historia · [WYŚLIJ] · czas · kosz. Pływająca pigułka —
+  // wyraźnie oddzielona od paska z nazwą. Oczka pomarańczowe TYLKO gdy jest
+  // coś nowego (nowe DMy / nowe rysunki od ostatniego zajrzenia).
   Widget _buildFunctionsBar() {
     return Container(
-      height: 56,
+      height: 52,
+      margin: const EdgeInsets.fromLTRB(12, 2, 12, 10),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: TC.ink.withValues(alpha: 0.08))),
+        color: TC.paper2,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: _barGlow,
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
           IconButton(
-            icon: const Icon(Icons.chat_bubble_outline),
+            icon: Badge(
+              isLabelVisible: _unreadMsgs > 0,
+              label: Text('$_unreadMsgs'),
+              backgroundColor: _badgeOrange,
+              textColor: Colors.white,
+              child: const Icon(Icons.chat_bubble_outline),
+            ),
             tooltip: 'Czat',
             color: TC.inkSoft,
             onPressed: widget.isGroup ? null : _openChat,
           ),
           IconButton(
             icon: Badge(
-              isLabelVisible: _history.isNotEmpty,
-              label: Text('${_history.length}'),
+              isLabelVisible: _histNew > 0,
+              label: Text('$_histNew'),
+              backgroundColor: _badgeOrange,
+              textColor: Colors.white,
               child: const Icon(Icons.collections_outlined),
             ),
             tooltip: 'Historia',
@@ -1501,18 +1644,13 @@ class _DrawingScreenState extends State<DrawingScreen>
 
   Widget _buildToolbar() {
     return Container(
+      // Pływająca pigułka jak pasek funkcji u góry — zaokrąglone rogi + glow,
+      // czytelna na każdym kolorze płótna i motywie.
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 10),
       decoration: BoxDecoration(
-        // Kremowy papier — wyraźnie odcina pasek od białego płótna.
         color: TC.paper2,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        boxShadow: [
-          BoxShadow(
-            color: TC.ink.withValues(alpha: 0.12),
-            blurRadius: 18,
-            offset: const Offset(0, -4),
-            spreadRadius: -2,
-          ),
-        ],
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: _barGlow,
       ),
       child: SafeArea(
         top: false,
@@ -1557,12 +1695,12 @@ class _DrawingScreenState extends State<DrawingScreen>
                       const SizedBox(width: 4),
                       IconButton(
                         onPressed: () => setState(() => _eraser = !_eraser),
-                        icon: const Icon(Icons.auto_fix_high),
+                        // Klasyczna gumka (skuwka + korpus), nie różdżka.
+                        icon: _eraserIcon(_eraser ? TC.brand : TC.inkSoft),
                         tooltip: 'Gumka',
                         style: IconButton.styleFrom(
                           backgroundColor:
                               _eraser ? TC.brand.withValues(alpha: 0.15) : null,
-                          foregroundColor: _eraser ? TC.brand : TC.inkSoft,
                         ),
                       ),
                     ],
@@ -1575,6 +1713,25 @@ class _DrawingScreenState extends State<DrawingScreen>
       ),
     );
   }
+
+  // Ikona gumki: obrócony prostokącik z ciemniejszą „skuwką" — czytelniejsza
+  // metafora niż magiczna różdżka z zestawu Material.
+  Widget _eraserIcon(Color c) => Transform.rotate(
+        angle: -0.62,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(3.5),
+          child: SizedBox(
+            width: 21,
+            height: 11,
+            child: Row(
+              children: [
+                Container(width: 7, color: c),
+                Expanded(child: Container(color: c.withValues(alpha: 0.35))),
+              ],
+            ),
+          ),
+        ),
+      );
 
   Widget _colorSwatch(Color c) {
     final selected = !_eraser && !_adaptiveInk && _brushColor == c;
@@ -1821,11 +1978,14 @@ class _CanvasGridPainter extends CustomPainter {
 class GalleryScreen extends StatelessWidget {
   final List<ReceivedDrawing> history;
   final bool loading;
+  // Statystyki 1:1 (kto ile wysłał + łącznie); null = bez zakładki (grupy).
+  final Future<List<MapEntry<String, int>>>? stats;
 
   const GalleryScreen({
     super.key,
     required this.history,
     required this.loading,
+    this.stats,
   });
 
   String _ago(DateTime t) {
@@ -1841,10 +2001,105 @@ class GalleryScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Historia')),
-      body: PaperBackground(
-        child: loading
+    // Bez statystyk (grupy) — klasyczny pojedynczy ekran.
+    if (stats == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Historia')),
+        body: PaperBackground(child: _grid(context)),
+      );
+    }
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Historia'),
+          bottom: TabBar(
+            labelColor: TC.brand,
+            unselectedLabelColor: TC.inkSoft,
+            indicatorColor: TC.brand,
+            tabs: const [
+              Tab(text: 'Galeria'),
+              Tab(text: 'Statystyki'),
+            ],
+          ),
+        ),
+        body: PaperBackground(
+          child: TabBarView(children: [_grid(context), _statsView()]),
+        ),
+      ),
+    );
+  }
+
+  // Zakładka statystyk: ile rysunków wysłało każde z was + suma.
+  Widget _statsView() {
+    return FutureBuilder<List<MapEntry<String, int>>>(
+      future: stats,
+      builder: (context, snap) {
+        if (!snap.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final rows = snap.data!;
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            GlassCard(
+              child: Column(
+                children: [
+                  const Eyebrow('Wasze rysunki'),
+                  const SizedBox(height: 14),
+                  for (final e in rows) ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 7),
+                      child: Row(
+                        children: [
+                          Icon(
+                            e.key == 'Łącznie'
+                                ? Icons.all_inclusive
+                                : Icons.brush_outlined,
+                            size: 18,
+                            color: e.key == 'Łącznie' ? TC.brand : TC.inkSoft,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              e.key,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontWeight: e.key == 'Łącznie'
+                                    ? FontWeight.w700
+                                    : FontWeight.w500,
+                                color: TC.ink,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '${e.value}',
+                            style: TextStyle(
+                              fontFamily: kFontSerif,
+                              fontSize: e.key == 'Łącznie' ? 30 : 24,
+                              color:
+                                  e.key == 'Łącznie' ? TC.brand : TC.ink,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (e.key != 'Łącznie')
+                      Divider(
+                          height: 1,
+                          color: TC.ink.withValues(alpha: 0.07)),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _grid(BuildContext context) {
+    return loading
           ? const Center(child: CircularProgressIndicator())
           : history.isEmpty
               ? Center(
@@ -1958,9 +2213,7 @@ class GalleryScreen extends StatelessWidget {
                       ),
                     );
                   },
-                ),
-        ),
-    );
+                );
   }
 }
 
