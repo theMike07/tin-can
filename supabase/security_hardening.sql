@@ -60,8 +60,41 @@ create policy "profiles select self+connections" on public.profiles
   );
 
 -- ------------------------------------------------------------
--- 3) (REKOMENDACJA — do zrobienia osobno) chat-media jest bucketem PUBLIC:
---    każdy z linkiem obejrzy obrazek/GIF z DM. Docelowo: bucket prywatny +
---    signed URL (z wygasaniem) albo szyfrowanie obrazków (kolejny etap E2E).
---    Zostawione świadomie — patrz notatki wydania 1.3.0.
+-- 3) Storage chat-media — twardsze zasady uploadu (anty-abuse).
+--    Było: każdy zalogowany mógł wrzucić DOWOLNY plik pod DOWOLNĄ ścieżkę bez
+--    limitu (hosting/zapychanie na koszt projektu). Teraz: tylko do WŁASNEGO
+--    folderu (name zaczyna się od twojego uid) + limit rozmiaru i typów MIME
+--    egzekwowany po stronie serwera (apka i tak wysyła do '$uid/...').
+-- ------------------------------------------------------------
+drop policy if exists "chat-media upload" on storage.objects;
+create policy "chat-media upload" on storage.objects
+  for insert to authenticated with check (
+    bucket_id = 'chat-media'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+-- opcjonalnie: kasowanie/nadpisywanie tylko własnych plików
+drop policy if exists "chat-media update own" on storage.objects;
+create policy "chat-media update own" on storage.objects
+  for update to authenticated using (
+    bucket_id = 'chat-media'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+drop policy if exists "chat-media delete own" on storage.objects;
+create policy "chat-media delete own" on storage.objects
+  for delete to authenticated using (
+    bucket_id = 'chat-media'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+-- limit 8 MB + tylko obrazki (serwerowo, nie tylko w apce)
+update storage.buckets
+   set file_size_limit = 8388608,
+       allowed_mime_types = array['image/jpeg','image/png','image/gif','image/webp']
+ where id = 'chat-media';
+
+-- ------------------------------------------------------------
+-- 4) (REKOMENDACJA — osobno) chat-media wciąż PUBLIC do ODCZYTU: każdy z
+--    linkiem obejrzy obrazek/GIF. Docelowo bucket prywatny + signed URL
+--    (z wygasaniem) albo szyfrowanie obrazków (kolejny etap E2E). Świadomie.
 -- ------------------------------------------------------------
