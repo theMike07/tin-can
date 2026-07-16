@@ -208,13 +208,15 @@ Deno.serve(async (req) => {
     }
 
     const from = await displayName(supabase, sender);
-    // Emotka wybrana przez nadawcę na płótnie (kolumna notif_emoji).
-    const emoji = ((record?.notif_emoji as string | undefined) ?? "").trim();
+    // Emotka wybrana przez nadawcę na płótnie (kolumna notif_emoji). Tytuł BEZ
+    // stałej puszki, żeby w powiadomieniu była DOKŁADNIE JEDNA emotka — ta
+    // wybrana (wcześniej 🥫 w tytule + wybrana w treści wyglądały jak dwie).
+    const emoji = ((record?.notif_emoji as string | undefined) ?? "🥫").trim();
     const sent = await pushToUser(
       supabase,
       recipient,
-      "Tin Can 🥫",
-      `${from} przysłał(a) Ci rysunek${emoji ? " " + emoji : ""}`,
+      "Tin Can",
+      `${from} przysłał(a) Ci rysunek ${emoji}`,
       { kind: "drawing" },
     );
     return new Response(JSON.stringify({ sent }), {
