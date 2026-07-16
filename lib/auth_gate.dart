@@ -1166,27 +1166,27 @@ class _HomeScreenState extends State<HomeScreen> {
             title: Text(p.label,
                 style: const TextStyle(fontWeight: FontWeight.w600)),
             subtitle: hasName ? Text(p.otherEmail) : null,
-            trailing: PopupMenuButton<String>(
+            // Czat = własna ikonka NA LIŚCIE (na lewo od ⋮), nie w menu.
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: Icon(Icons.chat_bubble_outline, color: TC.inkSoft),
+                  tooltip: 'Napisz wiadomość',
+                  onPressed: () {
+                    Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => ChatScreen(
+                          peerId: p.otherId, peerLabel: p.label),
+                    ));
+                  },
+                ),
+                PopupMenuButton<String>(
               icon: Icon(Icons.more_vert, color: TC.inkSoft),
               onSelected: (v) {
-                if (v == 'chat') {
-                  Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => ChatScreen(
-                        peerId: p.otherId, peerLabel: p.label),
-                  ));
-                }
                 if (v == 'remove') _removeFriend(p.connectionId, p.label);
                 if (v == 'widget_sq') _pinDrawingWidget(p);
               },
               itemBuilder: (_) => [
-                const PopupMenuItem(
-                  value: 'chat',
-                  child: ListTile(
-                    leading: Icon(Icons.chat_bubble_outline),
-                    title: Text('Napisz wiadomość'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
                 if (isAndroidApp)
                   const PopupMenuItem(
                     value: 'widget_sq',
@@ -1198,6 +1198,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 const PopupMenuItem(
                     value: 'remove', child: Text('Usuń znajomego')),
+              ],
+                ),
               ],
             ),
             onTap: () {

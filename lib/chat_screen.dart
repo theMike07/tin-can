@@ -481,6 +481,8 @@ class _ChatScreenState extends State<ChatScreen> {
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
         onLongPress: id != null ? () => _openReactionPicker(id) : null,
+        // Dwuklik = szybki lajk serduszkiem (ponowny dwuklik cofa).
+        onDoubleTap: id != null ? () => _react(id, '❤️') : null,
         child: Column(
           crossAxisAlignment:
               mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
