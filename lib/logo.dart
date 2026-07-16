@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'theme.dart';
-
 /// Znak marki Tin Can: dwie puszki + „sznurek" z DOKŁADNIE 3 kropek.
 /// Wierne odwzorowanie z `tin_can_web/src/components/Logo.astro`
 /// (viewBox 0 0 40 28). Rysowane wektorowo — ostre przy każdym rozmiarze.
@@ -23,8 +21,11 @@ class TinCanLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dotColor =
-        dot ?? (TC.dark ? Colors.white : const Color(0xFF201D2E));
+    // Kropki z motywu przez Theme.of — zależność od InheritedWidget sprawia,
+    // że logo przebudowuje się przy zmianie trybu NAWET jako `const` (bez tego
+    // const instancje pomijały rebuild i kropki „zacinały się" na starym kolorze).
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final dotColor = dot ?? (dark ? Colors.white : const Color(0xFF201D2E));
     return SizedBox(
       width: width,
       height: width * 28 / 40, // proporcje viewBox

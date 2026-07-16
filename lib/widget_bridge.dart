@@ -179,13 +179,17 @@ Future<void> _pushUpdate() async {
 // Zapisuje motyw widżetów dla warstwy Kotlin: kolor płótna (ten sam co w czacie
 // rysunkowym) i czy apka jest w trybie ciemnym. Zwraca kolor płótna do renderu.
 Future<Color> _saveWidgetTheme() async {
-  var canvasColor = const Color(0xFFFFFFFF);
+  var canvasColor = const Color(0xFFFBF8F1);
   var dark = false;
   try {
     final prefs = await SharedPreferences.getInstance();
-    final v = prefs.getInt('canvas_color');
-    if (v != null) canvasColor = Color(v);
     dark = prefs.getBool('dark_mode') ?? false;
+    final v = prefs.getInt('canvas_color');
+    // Brak ręcznego wyboru = AUTO: papier na jasnym, noc na ciemnym —
+    // dokładnie jak płótno w czacie rysunkowym.
+    canvasColor = v != null
+        ? Color(v)
+        : (dark ? const Color(0xFF14101F) : const Color(0xFFFBF8F1));
   } catch (_) {}
   // Kolor jako #RRGGBB (String) — bezpieczne dla Color.parseColor po stronie
   // Android (int przez home_widget bywa Long → wyjątek przy getInt).

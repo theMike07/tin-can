@@ -1,9 +1,13 @@
+import 'dart:convert' show base64Decode;
+
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:home_widget/home_widget.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'auth_gate.dart';
@@ -297,8 +301,15 @@ class _DrawingScreenState extends State<DrawingScreen>
   DateTime _lastTapUp = DateTime.fromMillisecondsSinceEpoch(0);
   Offset? _lastTapPos;
 
-  // Kolor płótna (niezależny od trybu ciemnego apki). Zawsze biały domyślnie.
-  Color _canvasColor = const Color(0xFFFFFFFF);
+  // Ręczny wybór płótna (null = AUTO: papier na jasnym, noc na ciemnym).
+  Color? _canvasChoice;
+  Color get _canvasColor => _canvasChoice ?? autoCanvasColor();
+
+  // Zdjęcie profilowe rozmówcy (base64) do nagłówka; null = inicjał.
+  String? _peerAvatar;
+
+  // Emotka dołączana do powiadomienia push u odbiorcy („X przysłał Ci rysunek ❤️").
+  String _notifEmoji = '🥫';
 
   // Ile sekund ma trwać odrysowywanie (materializacja) odebranej wiadomości.
   // Ustawia ODBIORCA suwakiem — duże rysunki nie muszą już przelatywać w sekundę.
@@ -362,8 +373,30 @@ class _DrawingScreenState extends State<DrawingScreen>
     _loadHistory();
     _loadStreak();
     loadCanvasColor().then((c) {
-      if (mounted) setState(() => _canvasColor = c);
+      if (mounted) setState(() => _canvasChoice = c);
     });
+    SharedPreferences.getInstance().then((p) {
+      final e = p.getString('notif_emoji');
+      if (mounted && e != null && e.isNotEmpty) {
+        setState(() => _notifEmoji = e);
+      }
+    });
+    _loadPeerAvatar();
+  }
+
+  // Awatar rozmówcy do nagłówka (tylko 1:1). Odporny na brak kolumny/wiersza.
+  Future<void> _loadPeerAvatar() async {
+    if (widget.peerId == null) return;
+    try {
+      final row = await supabase
+          .from('profiles')
+          .select()
+          .eq('id', widget.peerId!)
+          .maybeSingle();
+      if (mounted && row != null) {
+        setState(() => _peerAvatar = row['avatar_url'] as String?);
+      }
+    } catch (_) {}
   }
 
   // Wczytuje streak (kolejne dni z interakcją) — tylko dla czatów 1:1.
@@ -750,15 +783,23 @@ class _DrawingScreenState extends State<DrawingScreen>
         });
       } else {
         // .select() zwraca wstawiony wiersz — bierzemy id do śledzenia odczytu.
-        final inserted = await supabase
-            .from('drawings')
-            .insert({
-              'sender': myId,
-              'recipient': widget.peerId,
-              'strokes': strokesJson,
-            })
-            .select('id')
-            .single();
+        // notif_emoji = emotka do powiadomienia; jeśli kolumny jeszcze nie ma
+        // w bazie (przed migracją), ponawiamy wysyłkę bez niej.
+        final row = <String, dynamic>{
+          'sender': myId,
+          'recipient': widget.peerId,
+          'strokes': strokesJson,
+          'notif_emoji': _notifEmoji,
+        };
+        Map<String, dynamic> inserted;
+        try {
+          inserted =
+              await supabase.from('drawings').insert(row).select('id').single();
+        } on PostgrestException {
+          row.remove('notif_emoji');
+          inserted =
+              await supabase.from('drawings').insert(row).select('id').single();
+        }
         newId = inserted['id'] as String?;
       }
       // Do lokalnej historii (natychmiastowy podgląd; reload i tak dociągnie).
@@ -865,30 +906,41 @@ class _DrawingScreenState extends State<DrawingScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Row(
+        // Małe logo wycentrowane na górze, pod nim: profilowe + imię + streak.
+        centerTitle: true,
+        toolbarHeight: 76,
+        title: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const TinCanLogo(width: 26),
-            const SizedBox(width: 10),
-            Flexible(
-              child: Text(widget.peerLabel, overflow: TextOverflow.ellipsis),
-            ),
-            if (_streak > 0) ...[
-              const SizedBox(width: 8),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: TC.coral.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(999),
+            const TinCanLogo(width: 19),
+            const SizedBox(height: 3),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _peerAvatarBadge(),
+                const SizedBox(width: 8),
+                Flexible(
+                  child:
+                      Text(widget.peerLabel, overflow: TextOverflow.ellipsis),
                 ),
-                child: Text('🔥 $_streak',
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: TC.coral600)),
-              ),
-            ],
+                if (_streak > 0) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: TC.coral.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text('🔥 $_streak',
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: TC.coral600)),
+                  ),
+                ],
+              ],
+            ),
           ],
         ),
         actions: [
@@ -1076,6 +1128,50 @@ class _DrawingScreenState extends State<DrawingScreen>
 
   // --- Górny pasek funkcji + menu znajomego ---
 
+  // Kółko profilowe rozmówcy w nagłówku (zdjęcie albo inicjał na gradiencie),
+  // z subtelną obwódką, żeby nie zlewało się z tłem.
+  Widget _peerAvatarBadge() {
+    const d = 30.0;
+    Widget inner;
+    final b64 = _peerAvatar;
+    if (b64 != null && b64.isNotEmpty) {
+      try {
+        inner = Image.memory(base64Decode(b64),
+            width: d, height: d, fit: BoxFit.cover, gaplessPlayback: true);
+      } catch (_) {
+        inner = _peerInitialAvatar(d);
+      }
+    } else {
+      inner = _peerInitialAvatar(d);
+    }
+    return Container(
+      width: d,
+      height: d,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: TC.ink.withValues(alpha: 0.15)),
+      ),
+      child: ClipOval(child: inner),
+    );
+  }
+
+  Widget _peerInitialAvatar(double d) {
+    final s = widget.peerLabel.replaceAll('@', '').trim();
+    final initial = s.isEmpty ? '🥫' : s.substring(0, 1).toUpperCase();
+    return Container(
+      width: d,
+      height: d,
+      decoration: const BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: TC.brandGradient,
+      ),
+      alignment: Alignment.center,
+      child: Text(initial,
+          style: const TextStyle(
+              color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
+    );
+  }
+
   void _openChat() {
     if (widget.peerId == null) return;
     Navigator.of(context).push(MaterialPageRoute(
@@ -1129,6 +1225,7 @@ class _DrawingScreenState extends State<DrawingScreen>
       tooltip: 'Więcej',
       onSelected: (v) {
         if (v == 'canvas') _openCanvasColorSheet();
+        if (v == 'emoji') _openNotifEmojiSheet();
         if (v == 'chat') _openChat();
         if (v == 'widget_sq') _pinWidget(false);
         if (v == 'widget_tall') _pinWidget(true);
@@ -1140,6 +1237,14 @@ class _DrawingScreenState extends State<DrawingScreen>
           child: ListTile(
             leading: Icon(Icons.palette_outlined),
             title: Text('Kolor płótna'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem(
+          value: 'emoji',
+          child: ListTile(
+            leading: const Icon(Icons.emoji_emotions_outlined),
+            title: Text('Emotka powiadomienia   $_notifEmoji'),
             contentPadding: EdgeInsets.zero,
           ),
         ),
@@ -1177,7 +1282,58 @@ class _DrawingScreenState extends State<DrawingScreen>
     );
   }
 
-  // Wybór koloru płótna (niezależny od motywu apki).
+  // Pełna biblioteka emoji (tekst Unicode, systemowy font — zero assetów).
+  // Wybrana emotka leci z rysunkiem i pojawia się w powiadomieniu odbiorcy.
+  void _openNotifEmojiSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
+              child: Text(
+                'Z jaką emotką ma przyjść powiadomienie o Twoim rysunku?',
+                style: Theme.of(ctx).textTheme.titleMedium,
+                textAlign: TextAlign.center,
+              ),
+            ),
+            SizedBox(
+              height: 330,
+              child: EmojiPicker(
+                onEmojiSelected: (category, emoji) {
+                  setState(() => _notifEmoji = emoji.emoji);
+                  SharedPreferences.getInstance()
+                      .then((p) => p.setString('notif_emoji', emoji.emoji));
+                  Navigator.pop(ctx);
+                },
+                config: Config(
+                  height: 330,
+                  emojiViewConfig: EmojiViewConfig(
+                    backgroundColor: TC.paper,
+                    emojiSizeMax: 26,
+                  ),
+                  categoryViewConfig: CategoryViewConfig(
+                    backgroundColor: TC.paper,
+                    indicatorColor: TC.brand,
+                    iconColorSelected: TC.brand,
+                  ),
+                  bottomActionBarConfig:
+                      const BottomActionBarConfig(enabled: false),
+                  searchViewConfig: SearchViewConfig(
+                    backgroundColor: TC.paper,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Wybór koloru płótna (auto = podąża za motywem; ręczny nadpisuje).
   void _openCanvasColorSheet() {
     showModalBottomSheet<void>(
       context: context,
@@ -1192,13 +1348,15 @@ class _DrawingScreenState extends State<DrawingScreen>
                   style: Theme.of(ctx).textTheme.titleMedium),
               const SizedBox(height: 6),
               Text(
-                'Niezależny od motywu apki — możesz mieć białą kartkę nawet w trybie ciemnym.',
+                'Auto podąża za motywem apki (jasny papier / ciemna noc). '
+                'Ręczny wybór nadpisuje — np. biała kartka w trybie ciemnym.',
                 style: Theme.of(ctx).textTheme.bodySmall,
               ),
               const SizedBox(height: 18),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
+                  _autoCanvasSwatch(ctx),
                   for (final c in kCanvasColors) _canvasSwatch(c, ctx),
                 ],
               ),
@@ -1209,34 +1367,62 @@ class _DrawingScreenState extends State<DrawingScreen>
     );
   }
 
-  Widget _canvasSwatch(Color c, BuildContext sheetCtx) {
-    final selected = _canvasColor.toARGB32() == c.toARGB32();
+  void _pickCanvas(Color? c, BuildContext sheetCtx) {
+    setState(() => _canvasChoice = c);
+    saveCanvasColor(c);
+    // Widżety rysunku mają to samo płótno co czat — odśwież je od razu.
+    refreshDrawingWidgets();
+    Navigator.pop(sheetCtx);
+  }
+
+  BoxDecoration _swatchDecoration(bool selected, {Color? color, Gradient? g}) =>
+      BoxDecoration(
+        color: color,
+        gradient: g,
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: selected ? TC.brand : TC.ink.withValues(alpha: 0.2),
+          width: selected ? 4 : 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: TC.ink.withValues(alpha: 0.1),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      );
+
+  // Auto: pół jasne / pół ciemne + ikonka. Wybrane, gdy brak ręcznego koloru.
+  Widget _autoCanvasSwatch(BuildContext sheetCtx) {
+    final selected = _canvasChoice == null;
     return GestureDetector(
-      onTap: () {
-        setState(() => _canvasColor = c);
-        saveCanvasColor(c);
-        // Widżety rysunku mają to samo płótno co czat — odśwież je od razu.
-        refreshDrawingWidgets();
-        Navigator.pop(sheetCtx);
-      },
+      onTap: () => _pickCanvas(null, sheetCtx),
       child: Container(
         width: 58,
         height: 58,
-        decoration: BoxDecoration(
-          color: c,
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: selected ? TC.brand : TC.ink.withValues(alpha: 0.2),
-            width: selected ? 4 : 1.5,
+        alignment: Alignment.center,
+        decoration: _swatchDecoration(
+          selected,
+          g: const LinearGradient(
+            colors: [kCanvasLight, kCanvasLight, kCanvasDark, kCanvasDark],
+            stops: [0.0, 0.5, 0.5, 1.0],
           ),
-          boxShadow: [
-            BoxShadow(
-              color: TC.ink.withValues(alpha: 0.1),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
-            ),
-          ],
         ),
+        child: const Icon(Icons.brightness_auto, color: TC.brand, size: 22),
+      ),
+    );
+  }
+
+  Widget _canvasSwatch(Color c, BuildContext sheetCtx) {
+    final selected =
+        _canvasChoice != null && _canvasChoice!.toARGB32() == c.toARGB32();
+    return GestureDetector(
+      onTap: () => _pickCanvas(c, sheetCtx),
+      child: Container(
+        width: 58,
+        height: 58,
+        decoration: _swatchDecoration(selected, color: c),
       ),
     );
   }

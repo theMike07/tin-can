@@ -27,28 +27,38 @@ Future<void> setDarkMode(bool value) async {
   } catch (_) {}
 }
 
-// Kolor płótna do rysowania — NIEZALEŻNY od trybu ciemnego apki (np. białe
-// płótno jak kartka nawet przy czarnym motywie). Wybierany w pasku rysowania.
+// Kolor płótna do rysowania. Domyślnie AUTO — podąża za motywem apki
+// (ładne jasne „papier" / ładne ciemne „noc", nie 100% biel/czerń).
+// Wybór ręczny nadpisuje auto (np. biała kartka w ciemnym motywie).
 const List<Color> kCanvasColors = [
   Color(0xFFFFFFFF), // biel (kartka)
   Color(0xFFFBF8F1), // papier
   Color(0xFF14101F), // noc
   Color(0xFF000000), // czerń
 ];
+const Color kCanvasLight = Color(0xFFFBF8F1); // auto: jasny motyw
+const Color kCanvasDark = Color(0xFF14101F); // auto: ciemny motyw
+Color autoCanvasColor() => TC.dark ? kCanvasDark : kCanvasLight;
 
-Future<Color> loadCanvasColor() async {
+// null = auto (brak ręcznego wyboru).
+Future<Color?> loadCanvasColor() async {
   try {
     final prefs = await SharedPreferences.getInstance();
     final v = prefs.getInt('canvas_color');
     if (v != null) return Color(v);
   } catch (_) {}
-  return const Color(0xFFFFFFFF);
+  return null;
 }
 
-Future<void> saveCanvasColor(Color c) async {
+// null = wróć do auto (usuwa ręczny wybór).
+Future<void> saveCanvasColor(Color? c) async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('canvas_color', c.toARGB32());
+    if (c == null) {
+      await prefs.remove('canvas_color');
+    } else {
+      await prefs.setInt('canvas_color', c.toARGB32());
+    }
   } catch (_) {}
 }
 

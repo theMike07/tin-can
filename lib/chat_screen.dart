@@ -24,7 +24,17 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<Map<String, dynamic>> _messages = [];
   // Reakcje: messageId -> (userId -> emoji). Jedna reakcja na osobę na wiadomość.
   final Map<String, Map<String, String>> _reactions = {};
+  // Serce Z selektorem wariantu (FE0F) — bez niego Android renderuje czarny
+  // glif tekstowy zamiast czerwonej emotki.
   static const _reactionSet = ['❤️', '😂', '👍', '😮', '😢'];
+
+  // Stare reakcje zapisane bez FE0F naprawiamy przy wyświetlaniu.
+  String _fixEmoji(String e) => e == '❤' ? '❤️' : e;
+
+  // Emoji renderujemy Roboto: bundlowany Inter ma WŁASNY czarno-biały glif
+  // serca i wygrywa z systemową kolorową emotką. Roboto go nie ma, więc
+  // Android sięga po Noto Color Emoji — serce jest czerwone jak wszędzie.
+  static const _emojiStyle = TextStyle(fontFamily: 'Roboto', fontSize: 30);
   final _picker = ImagePicker();
   RealtimeChannel? _channel;
   bool _loading = true;
@@ -57,9 +67,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _load() async {
     try {
+      // select() = wszystkie kolumny; brak read_at (przed migracją) nie wywala.
       final rows = await supabase
           .from('messages')
-          .select('id, sender, recipient, body, image_url, created_at')
+          .select()
           .or('and(sender.eq.$myId,recipient.eq.${widget.peerId}),'
               'and(sender.eq.${widget.peerId},recipient.eq.$myId)')
           .order('created_at', ascending: true)
@@ -68,6 +79,7 @@ class _ChatScreenState extends State<ChatScreen> {
         ..clear()
         ..addAll((rows as List).cast<Map<String, dynamic>>());
       await _loadReactions();
+      _markRead();
     } catch (e) {
       debugPrint('TINCAN_CHAT_LOAD_ERROR: $e');
     } finally {
@@ -76,6 +88,15 @@ class _ChatScreenState extends State<ChatScreen> {
         _scrollToEnd();
       }
     }
+  }
+
+  // Oznacz przychodzące jako przeczytane (czat otwarty = czytam). RPC może
+  // jeszcze nie istnieć przed migracją — wtedy cicho pomijamy.
+  Future<void> _markRead() async {
+    try {
+      await supabase
+          .rpc('mark_messages_read', params: {'p_peer': widget.peerId});
+    } catch (_) {}
   }
 
   void _subscribe() {
@@ -95,6 +116,25 @@ class _ChatScreenState extends State<ChatScreen> {
             if (rec['sender'] != widget.peerId) return; // tylko ta rozmowa
             setState(() => _messages.add(Map<String, dynamic>.from(rec)));
             _scrollToEnd();
+            _markRead(); // czytam na żywo — od razu ✓ u nadawcy
+          },
+        )
+        // Odczyty moich wiadomości: rozmówca czyta -> UPDATE read_at -> ✓.
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'messages',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'sender',
+            value: myId,
+          ),
+          callback: (payload) {
+            final rec = payload.newRecord;
+            if (rec['recipient'] != widget.peerId) return;
+            final i = _messages.indexWhere((m) => m['id'] == rec['id']);
+            if (i < 0) return;
+            setState(() => _messages[i] = Map<String, dynamic>.from(rec));
           },
         )
         // Reakcje: RLS oddaje tylko reakcje z moich rozmów; filtrujemy po stronie
@@ -183,7 +223,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   },
                   child: Padding(
                     padding: const EdgeInsets.all(8),
-                    child: Text(e, style: const TextStyle(fontSize: 30)),
+                    child: Text(e, style: _emojiStyle),
                   ),
                 ),
             ],
@@ -329,7 +369,12 @@ class _ChatScreenState extends State<ChatScreen> {
                           controller: _scroll,
                           padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
                           itemCount: _messages.length,
-                          itemBuilder: (_, i) => _bubble(_messages[i]),
+                          itemBuilder: (_, i) => Column(
+                            children: [
+                              if (_needsTimeStamp(i)) _timeStamp(_messages[i]),
+                              _bubble(_messages[i]),
+                            ],
+                          ),
                         ),
             ),
             _inputBar(),
@@ -383,6 +428,44 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  // Wyśrodkowana godzina nad wiadomością, gdy przerwa od poprzedniej > 10 min.
+  bool _needsTimeStamp(int i) {
+    final t = DateTime.tryParse(_messages[i]['created_at']?.toString() ?? '');
+    if (t == null) return false;
+    if (i == 0) return true;
+    final prev =
+        DateTime.tryParse(_messages[i - 1]['created_at']?.toString() ?? '');
+    if (prev == null) return false;
+    return t.difference(prev).inMinutes >= 10;
+  }
+
+  Widget _timeStamp(Map<String, dynamic> m) {
+    final t = DateTime.tryParse(m['created_at']?.toString() ?? '')?.toLocal();
+    if (t == null) return const SizedBox.shrink();
+    final now = DateTime.now();
+    final sameDay =
+        t.year == now.year && t.month == now.month && t.day == now.day;
+    final hh =
+        '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    final label = sameDay
+        ? hh
+        : '${t.day.toString().padLeft(2, '0')}.${t.month.toString().padLeft(2, '0')} $hh';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Center(
+        child: Text(
+          label,
+          style: TextStyle(
+            fontFamily: kFontMono,
+            fontSize: 11,
+            letterSpacing: 0.6,
+            color: TC.inkSoft,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _bubble(Map<String, dynamic> m) {
     final mine = m['sender'] == myId;
     final body = (m['body'] as String?) ?? '';
@@ -410,17 +493,21 @@ class _ChatScreenState extends State<ChatScreen> {
         constraints:
             BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
         decoration: BoxDecoration(
+          // Motyw dymków = kolory logo: moje fioletowe, przychodzące koralowe
+          // (pomarańczowy tint czytelny w obu trybach).
           color: mine
               ? TC.brand
-              : TC.glass,
+              : Color.alphaBlend(
+                  TC.coral.withValues(alpha: TC.dark ? 0.30 : 0.16), TC.paper),
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(18),
             topRight: const Radius.circular(18),
             bottomLeft: Radius.circular(mine ? 18 : 5),
             bottomRight: Radius.circular(mine ? 5 : 18),
           ),
-          border:
-              mine ? null : Border.all(color: TC.ink.withValues(alpha: 0.08)),
+          border: mine
+              ? null
+              : Border.all(color: TC.coral.withValues(alpha: 0.28)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -475,11 +562,25 @@ class _ChatScreenState extends State<ChatScreen> {
               padding: hasImage
                   ? const EdgeInsets.fromLTRB(8, 3, 8, 2)
                   : const EdgeInsets.only(top: 2),
-              child: Text(
-                time,
-                style: TextStyle(
-                    fontSize: 10,
-                    color: mine ? Colors.white70 : TC.inkSoft),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    time,
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: mine ? Colors.white70 : TC.inkSoft),
+                  ),
+                  // Jeden ptaszek = rozmówca przeczytał.
+                  if (mine && m['read_at'] != null) ...const [
+                    SizedBox(width: 4),
+                    Text('✓',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white)),
+                  ],
+                ],
               ),
             ),
           ],
@@ -509,8 +610,8 @@ class _ChatScreenState extends State<ChatScreen> {
               : TC.ink.withValues(alpha: 0.1),
         ),
       ),
-      child: Text(reacs.values.join(' '),
-          style: const TextStyle(fontSize: 13)),
+      child: Text(reacs.values.map(_fixEmoji).join(' '),
+          style: _emojiStyle.copyWith(fontSize: 13)),
     );
   }
 

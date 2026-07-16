@@ -1,11 +1,15 @@
 // Supabase Edge Function: powiadomienia push (FCM) dla Tin Can.
-// - webhook INSERT na tabeli drawings  -> "przysłał(a) Ci rysunek" do ODBIORCY
-// - webhook UPDATE na tabeli drawings  -> gdy liked_at zmienia się z null na
-//   wartość: "polubił(a) Twój rysunek" do NADAWCY. Inne UPDATE (np. read_at)
-//   są ignorowane.
+// Jedna funkcja, webhooki z trzech tabel (payload.table mówi skąd):
+// - drawings INSERT           -> "przysłał(a) Ci rysunek [emotka]" do ODBIORCY
+//   (emotkę wybiera nadawca na płótnie; kolumna drawings.notif_emoji)
+// - drawings UPDATE           -> liked_at null->wartość: "polubił(a) Twój
+//   rysunek" do NADAWCY (read_at itp. ignorowane)
+// - messages INSERT           -> "💬 nowa wiadomość" do ODBIORCY
+// - message_reactions INS/UPD -> "zareagował(a) X na Twoją wiadomość" do
+//   AUTORA wiadomości (reakcja na własną = cisza)
 //
-// Payload zawiera też `data.kind` (drawing|like) — apka używa go w tle
-// (onBackgroundMessage) m.in. do odświeżenia widżetu ekranu głównego.
+// Payload zawiera też `data.kind` (drawing|like|message|reaction) — apka używa
+// go w tle (onBackgroundMessage) m.in. do odświeżenia widżetu ekranu głównego.
 //
 // Sekrety: FCM_SERVICE_ACCOUNT = cała zawartość klucza serwisowego Firebase (JSON).
 // SUPABASE_URL i SUPABASE_SERVICE_ROLE_KEY są dostępne automatycznie.
@@ -101,6 +105,7 @@ Deno.serve(async (req) => {
   try {
     const payload = await req.json();
     const type = (payload.type as string | undefined) ?? "INSERT";
+    const table = (payload.table as string | undefined) ?? "drawings";
     const record = payload.record ?? payload;
     const oldRecord = payload.old_record ?? {};
     const recipient = record?.recipient as string | undefined;
@@ -110,6 +115,62 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
+
+    // --- Wiadomość DM: powiadom odbiorcę. ---
+    if (table === "messages") {
+      if (type !== "INSERT" || !recipient || sender === recipient) {
+        return new Response("ignore", { status: 200 });
+      }
+      const from = await displayName(supabase, sender);
+      const text = ((record?.body as string | undefined) ?? "").trim();
+      const hasImage = !!(record?.image_url as string | undefined);
+      const preview = text
+        ? (text.length > 90 ? text.slice(0, 90) + "…" : text)
+        : (hasImage ? "📷 obrazek" : "wiadomość");
+      const sent = await pushToUser(
+        supabase,
+        recipient,
+        "Tin Can 💬",
+        `${from}: ${preview}`,
+        { kind: "message" },
+      );
+      return new Response(JSON.stringify({ message: sent }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // --- Reakcja na wiadomość: powiadom autora wiadomości. ---
+    if (table === "message_reactions") {
+      if (type === "DELETE") return new Response("ignore", { status: 200 });
+      const messageId = record?.message_id as string | undefined;
+      const reactor = record?.user_id as string | undefined;
+      const emoji = (record?.emoji as string | undefined) ?? "";
+      if (!messageId || !reactor) {
+        return new Response("ignore", { status: 200 });
+      }
+      const { data: msg } = await supabase
+        .from("messages")
+        .select("sender, recipient")
+        .eq("id", messageId)
+        .maybeSingle();
+      // reakcja na własną wiadomość -> cisza
+      if (!msg || msg.sender === reactor) {
+        return new Response("ignore", { status: 200 });
+      }
+      const who = await displayName(supabase, reactor);
+      const sent = await pushToUser(
+        supabase,
+        msg.sender as string,
+        "Tin Can 💬",
+        `${who} zareagował(a) ${emoji} na Twoją wiadomość`,
+        { kind: "reaction" },
+      );
+      return new Response(JSON.stringify({ reaction: sent }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
 
     if (type === "UPDATE") {
       // Lajk: liked_at przeszło z null na wartość. (read_at itp. ignorujemy;
@@ -143,11 +204,13 @@ Deno.serve(async (req) => {
     }
 
     const from = await displayName(supabase, sender);
+    // Emotka wybrana przez nadawcę na płótnie (kolumna notif_emoji).
+    const emoji = ((record?.notif_emoji as string | undefined) ?? "").trim();
     const sent = await pushToUser(
       supabase,
       recipient,
       "Tin Can 🥫",
-      `${from} przysłał(a) Ci rysunek`,
+      `${from} przysłał(a) Ci rysunek${emoji ? " " + emoji : ""}`,
       { kind: "drawing" },
     );
     return new Response(JSON.stringify({ sent }), {

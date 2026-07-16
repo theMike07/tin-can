@@ -283,6 +283,19 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _load();
     registerPushToken(); // zarejestruj urządzenie do powiadomień push
+    // Przebuduj ekran przy zmianie motywu — bez tego karty czytające TC.*
+    // (bez zależności od Theme.of) zostawały na kolorach starego trybu.
+    appDarkMode.addListener(_onThemeChanged);
+  }
+
+  void _onThemeChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    appDarkMode.removeListener(_onThemeChanged);
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -829,7 +842,9 @@ class _HomeScreenState extends State<HomeScreen> {
           decoration:
               const BoxDecoration(color: TC.brand100, shape: BoxShape.circle),
           alignment: Alignment.center,
-          child: TinCanLogo(width: size * 0.62),
+          // Kółko jest ZAWSZE jasne (brand100), więc kropki na stałe ciemne —
+          // auto (białe w ciemnym motywie) zlewałoby się z tym tłem.
+          child: TinCanLogo(width: size * 0.62, dot: const Color(0xFF201D2E)),
         );
   }
 

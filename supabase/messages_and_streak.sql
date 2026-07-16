@@ -15,6 +15,11 @@ create table if not exists public.messages (
 alter table public.messages enable row level security;
 alter table public.messages replica identity full;
 
+-- Uprawnienia TABELOWE: RLS filtruje wiersze, ale rola i tak musi mieć GRANT.
+-- Tabele tworzone czystym SQL-em nie zawsze dziedziczą domyślne granty Supabase
+-- (dlatego rysunki działały, a wiadomości dawały 42501 „permission denied").
+grant select, insert on public.messages to authenticated;
+
 -- select: tylko uczestnik rozmowy
 drop policy if exists "msg select" on public.messages;
 create policy "msg select" on public.messages
@@ -107,6 +112,9 @@ create table if not exists public.message_reactions (
 alter table public.message_reactions enable row level security;
 alter table public.message_reactions replica identity full;
 
+-- Uprawnienia tabelowe dla reakcji (select + insert/update/delete własnych).
+grant select, insert, update, delete on public.message_reactions to authenticated;
+
 -- select: reakcje na wiadomości z MOICH rozmów
 drop policy if exists "reac select" on public.message_reactions;
 create policy "reac select" on public.message_reactions
@@ -157,3 +165,45 @@ create policy "chat-media read" on storage.objects
 drop policy if exists "chat-media upload" on storage.objects;
 create policy "chat-media upload" on storage.objects
   for insert to authenticated with check (bucket_id = 'chat-media');
+
+-- ============================================================
+-- 5) v1.2.5: odczyty wiadomości + emotka powiadomienia + webhooki push
+-- ============================================================
+
+-- Odczyt wiadomości (pojedynczy ptaszek). Ustawiane przez RPC (definer),
+-- więc nie potrzeba polityki UPDATE dla użytkowników.
+alter table public.messages add column if not exists read_at timestamptz;
+
+create or replace function public.mark_messages_read(p_peer uuid)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update public.messages set read_at = now()
+  where recipient = auth.uid()::text
+    and sender = p_peer::text
+    and read_at is null;
+$$;
+
+grant execute on function public.mark_messages_read(uuid) to authenticated;
+
+-- Emotka wybierana przez nadawcę rysunku — trafia do treści powiadomienia.
+alter table public.drawings add column if not exists notif_emoji text;
+
+-- Webhooki push: wiadomości i reakcje lecą do TEJ SAMEJ edge function co
+-- rysunki (payload.table mówi funkcji, co przyszło). Wymaga wcześniejszego
+-- (re)deployu funkcji notify-on-drawing w nowej wersji.
+drop trigger if exists tin_can_notify_message on public.messages;
+create trigger tin_can_notify_message
+  after insert on public.messages
+  for each row execute function supabase_functions.http_request(
+    'https://safvbfwtqjlgcegnyckp.supabase.co/functions/v1/notify-on-drawing',
+    'POST', '{"Content-Type":"application/json"}', '{}', '5000');
+
+drop trigger if exists tin_can_notify_reaction on public.message_reactions;
+create trigger tin_can_notify_reaction
+  after insert or update on public.message_reactions
+  for each row execute function supabase_functions.http_request(
+    'https://safvbfwtqjlgcegnyckp.supabase.co/functions/v1/notify-on-drawing',
+    'POST', '{"Content-Type":"application/json"}', '{}', '5000');
