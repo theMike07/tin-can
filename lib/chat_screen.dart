@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'crypto.dart';
 import 'theme.dart';
 
 // Zwykły czat tekstowy (DM 1:1). Szyfrowanie E2E planowane w przyszłości.
@@ -42,18 +43,27 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _sending = false;
   bool _uploading = false;
   String? _peerAvatar; // zdjęcie profilowe rozmówcy (base64) do nagłówka
+  String? _peerPubKey; // klucz publiczny rozmówcy (E2E); null = szyfrowanie off
 
   @override
   void initState() {
     super.initState();
     myId = supabase.auth.currentUser!.id;
-    _load();
-    _loadPeerAvatar();
+    _init();
     _subscribe();
   }
 
-  // Awatar rozmówcy do nagłówka. Odporny na brak kolumny/wiersza (fallback = logo).
-  Future<void> _loadPeerAvatar() async {
+  // Najpierw profil rozmówcy (klucz publiczny), potem wiadomości — żeby dało się
+  // je od razu odszyfrować. E2E.ensureKeys gwarantuje, że MÓJ klucz publiczny
+  // jest na serwerze, więc rozmówca może szyfrować do mnie.
+  Future<void> _init() async {
+    await E2E.ensureKeys();
+    await _loadPeerProfile();
+    await _load();
+  }
+
+  // Profil rozmówcy: awatar + klucz publiczny. Odporny na brak kolumny/wiersza.
+  Future<void> _loadPeerProfile() async {
     try {
       final row = await supabase
           .from('profiles')
@@ -61,9 +71,24 @@ class _ChatScreenState extends State<ChatScreen> {
           .eq('id', widget.peerId)
           .maybeSingle();
       if (mounted && row != null) {
-        setState(() => _peerAvatar = row['avatar_url'] as String?);
+        setState(() {
+          _peerAvatar = row['avatar_url'] as String?;
+          _peerPubKey = row['public_key'] as String?;
+        });
       }
     } catch (_) {}
+  }
+
+  // Odszyfrowuje wiadomość „w miejscu": enc -> body (albo znacznik kłódki).
+  Future<void> _decryptRow(Map<String, dynamic> m) async {
+    final enc = m['enc'] as String?;
+    if (enc == null || enc.isEmpty) return; // zwykły tekst / obrazek
+    final text = await E2E.decrypt(enc, _peerPubKey);
+    if (text != null) {
+      m['body'] = text;
+    } else {
+      m['_locked'] = true; // nie da się odszyfrować (np. po reinstalacji)
+    }
   }
 
   Future<void> _load() async {
@@ -76,9 +101,11 @@ class _ChatScreenState extends State<ChatScreen> {
               'and(sender.eq.${widget.peerId},recipient.eq.$myId)')
           .order('created_at', ascending: true)
           .limit(500);
+      final list = (rows as List).cast<Map<String, dynamic>>();
+      await Future.wait(list.map(_decryptRow)); // odszyfruj przed pokazaniem
       _messages
         ..clear()
-        ..addAll((rows as List).cast<Map<String, dynamic>>());
+        ..addAll(list);
       await _loadReactions();
       _markRead();
     } catch (e) {
@@ -112,10 +139,12 @@ class _ChatScreenState extends State<ChatScreen> {
             column: 'recipient',
             value: myId,
           ),
-          callback: (payload) {
-            final rec = payload.newRecord;
+          callback: (payload) async {
+            final rec = Map<String, dynamic>.from(payload.newRecord);
             if (rec['sender'] != widget.peerId) return; // tylko ta rozmowa
-            setState(() => _messages.add(Map<String, dynamic>.from(rec)));
+            await _decryptRow(rec); // odszyfruj zanim pokażesz
+            if (!mounted) return;
+            setState(() => _messages.add(rec));
             _scrollToEnd();
             _markRead(); // czytam na żywo — od razu ✓ u nadawcy
           },
@@ -239,11 +268,28 @@ class _ChatScreenState extends State<ChatScreen> {
     if (text.isEmpty || _sending) return;
     setState(() => _sending = true);
     try {
-      final inserted = await supabase
-          .from('messages')
-          .insert({'sender': myId, 'recipient': widget.peerId, 'body': text})
-          .select('id, sender, recipient, body, image_url, created_at')
-          .single();
+      // E2E: gdy rozmówca ma klucz publiczny — szyfrujemy, body puste.
+      // Bez klucza (albo starsza wersja u rozmówcy) — zwykły tekst.
+      final enc = await E2E.encrypt(text, _peerPubKey);
+      final payload = <String, dynamic>{
+        'sender': myId,
+        'recipient': widget.peerId,
+        'body': enc == null ? text : '',
+        'enc': ?enc,
+      };
+      Map<String, dynamic> inserted;
+      try {
+        inserted =
+            await supabase.from('messages').insert(payload).select().single();
+      } on PostgrestException {
+        // kolumna enc jeszcze nie istnieje (przed migracją) -> zwykły tekst
+        payload
+          ..remove('enc')
+          ..['body'] = text;
+        inserted =
+            await supabase.from('messages').insert(payload).select().single();
+      }
+      inserted['body'] = text; // lokalnie pokazujemy jawny tekst
       _input.clear();
       setState(() => _messages.add(inserted));
       _scrollToEnd();
@@ -477,6 +523,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final id = m['id'] as String?;
     final imageUrl = m['image_url'] as String?;
     final hasImage = imageUrl != null && imageUrl.isNotEmpty;
+    final locked = m['_locked'] == true; // enc, którego nie da się odszyfrować
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
@@ -545,6 +592,24 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                 ),
+              ),
+            if (locked)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.lock_outline,
+                      size: 15, color: mine ? Colors.white70 : TC.inkSoft),
+                  const SizedBox(width: 5),
+                  Flexible(
+                    child: Text(
+                      'Nie można odszyfrować na tym urządzeniu',
+                      style: TextStyle(
+                          fontStyle: FontStyle.italic,
+                          fontSize: 13,
+                          color: mine ? Colors.white70 : TC.inkSoft),
+                    ),
+                  ),
+                ],
               ),
             if (body.isNotEmpty) ...[
               if (hasImage) const SizedBox(height: 6),

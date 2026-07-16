@@ -124,7 +124,11 @@ Deno.serve(async (req) => {
       const from = await displayName(supabase, sender);
       const text = ((record?.body as string | undefined) ?? "").trim();
       const hasImage = !!(record?.image_url as string | undefined);
-      const preview = text
+      const isEnc = !!(record?.enc as string | undefined);
+      // E2E: serwer nie widzi treści -> bez podglądu (tylko „nowa wiadomość").
+      const preview = isEnc
+        ? "🔒 Nowa wiadomość"
+        : text
         ? (text.length > 90 ? text.slice(0, 90) + "…" : text)
         : (hasImage ? "📷 obrazek" : "wiadomość");
       const sent = await pushToUser(

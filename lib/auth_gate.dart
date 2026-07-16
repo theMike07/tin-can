@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'chat_screen.dart';
+import 'crypto.dart';
 import 'logo.dart';
 import 'main.dart';
 import 'push.dart';
@@ -283,6 +284,7 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _load();
     registerPushToken(); // zarejestruj urządzenie do powiadomień push
+    E2E.ensureKeys(); // klucze E2E: wgraj mój klucz publiczny do profilu
     // Przebuduj ekran przy zmianie motywu — bez tego karty czytające TC.*
     // (bez zależności od Theme.of) zostawały na kolorach starego trybu.
     appDarkMode.addListener(_onThemeChanged);
