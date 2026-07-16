@@ -29,3 +29,8 @@ grant execute on function public.set_public_key(text) to authenticated;
 --    messages_and_streak.sql już obejmują tę tabelę (nowa kolumna nie wymaga
 --    osobnego grantu).
 alter table public.messages add column if not exists enc text;
+
+-- 3) Szyfrogram rysunku 1:1 (E2E). Gdy ustawiony, strokes jest pustą listą.
+--    Rysunki grupowe zostają jawne (E2E grupowe = osobny temat). Odbiorca
+--    odszyfrowuje kluczem konwersacji (jak wiadomości).
+alter table public.drawings add column if not exists enc text;

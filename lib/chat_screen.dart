@@ -46,9 +46,10 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _peerPubKey; // klucz publiczny rozmówcy (E2E); null = szyfrowanie off
   bool _keyChanged = false; // klucz rozmówcy zmienił się od ostatniego razu
 
-  // AAD wiążące szyfrogram z kierunkiem nadawca>odbiorca (patrz E2E.encrypt).
+  // AAD wiążące szyfrogram z kierunkiem nadawca>odbiorca (kontekst 'dm' oddziela
+  // szyfrogramy wiadomości od rysunków — nie da się ich pomylić/podmienić).
   List<int> _aad(String sender, String recipient) =>
-      utf8.encode('$sender>$recipient');
+      utf8.encode('dm|$sender>$recipient');
 
   @override
   void initState() {
@@ -295,8 +296,12 @@ class _ChatScreenState extends State<ChatScreen> {
       try {
         inserted =
             await supabase.from('messages').insert(payload).select().single();
-      } on PostgrestException {
-        // kolumna enc jeszcze nie istnieje (przed migracją) -> zwykły tekst
+      } on PostgrestException catch (e) {
+        // TYLKO gdy kolumny enc jeszcze nie ma (przed migracją) -> zwykły tekst.
+        // Inne błędy rzucamy dalej, by nie wysłać jawnie tego, co miało być
+        // zaszyfrowane.
+        final missingCol = e.code == '42703' || e.code == 'PGRST204';
+        if (!missingCol) rethrow;
         payload
           ..remove('enc')
           ..['body'] = text;

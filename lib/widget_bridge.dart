@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'crypto.dart' show E2E;
 import 'main.dart' show Stroke;
 import 'theme.dart' show adaptiveInkFor;
 
@@ -151,9 +152,39 @@ Future<void> _refreshPerson(
     return;
   }
   final row = list.first as Map<String, dynamic>;
-  final strokes = (row['strokes'] as List)
-      .map((e) => Stroke.fromJson(e as Map<String, dynamic>))
-      .toList();
+  // E2E: rysunek może być zaszyfrowany (kolumna enc). Odszyfruj kluczem
+  // rozmówcy; w tle (isolate push) secure storage bywa niedostępne -> wtedy
+  // kłódka w podpisie i render dopiero po otwarciu apki (foreground).
+  List<Stroke> strokes;
+  final enc = row['enc'] as String?;
+  if (enc != null && enc.isNotEmpty) {
+    final prof = await supabase
+        .from('profiles')
+        .select('public_key')
+        .eq('id', peerId)
+        .maybeSingle();
+    final peerPub = prof?['public_key'] as String?;
+    final json = await E2E.decrypt(enc, peerPub,
+        aad: utf8.encode('draw|$peerId>$myId'));
+    if (json == null) {
+      await HomeWidget.saveWidgetData<String>(
+          'widget_caption_$peerId', '🔒 $label · otwórz Tin Can');
+      return; // nie nadpisuj obrazka — pokaże się po odszyfrowaniu w apce
+    }
+    try {
+      strokes = (jsonDecode(json) as List)
+          .map((e) => Stroke.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return;
+    }
+  } else if (row['strokes'] is List) {
+    strokes = (row['strokes'] as List)
+        .map((e) => Stroke.fromJson(e as Map<String, dynamic>))
+        .toList();
+  } else {
+    return;
+  }
   final png = await _renderStrokesPng(strokes, canvasColor);
   if (png == null) return;
   final dir = await getApplicationSupportDirectory();

@@ -1,4 +1,4 @@
-import 'dart:convert' show base64Decode;
+import 'dart:convert';
 
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -13,6 +13,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'auth_gate.dart';
 import 'chat_screen.dart';
 import 'chime.dart';
+import 'crypto.dart';
 import 'logo.dart';
 import 'push.dart';
 import 'theme.dart';
@@ -228,13 +229,18 @@ class ReceivedDrawing {
   });
 
   // Buduje z wiersza bazy / payloadu realtime; myId ustala kierunek (od/do).
-  factory ReceivedDrawing.fromRow(Map<String, dynamic> row, String myId) {
+  // `strokes` można podać już odszyfrowane (E2E); inaczej czytamy jawne z wiersza.
+  factory ReceivedDrawing.fromRow(Map<String, dynamic> row, String myId,
+      {List<Stroke>? strokes}) {
     final sender = (row['sender'] as String?) ?? '?';
     final recipient = (row['recipient'] as String?) ?? '?';
     final outgoing = sender == myId;
-    final strokes = (row['strokes'] as List)
-        .map((e) => Stroke.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final parsed = strokes ??
+        ((row['strokes'] is List)
+            ? (row['strokes'] as List)
+                .map((e) => Stroke.fromJson(e as Map<String, dynamic>))
+                .toList()
+            : const <Stroke>[]);
     return ReceivedDrawing(
       id: row['id'] as String?,
       sender: sender,
@@ -244,7 +250,7 @@ class ReceivedDrawing {
       createdAt:
           DateTime.tryParse(row['created_at']?.toString() ?? '')?.toLocal() ??
               DateTime.now(),
-      strokes: strokes,
+      strokes: parsed,
       readAt: DateTime.tryParse(row['read_at']?.toString() ?? '')?.toLocal(),
       likedAt: DateTime.tryParse(row['liked_at']?.toString() ?? '')?.toLocal(),
     );
@@ -307,6 +313,37 @@ class _DrawingScreenState extends State<DrawingScreen>
 
   // Zdjęcie profilowe rozmówcy (base64) do nagłówka; null = inicjał.
   String? _peerAvatar;
+  // Klucz publiczny rozmówcy (E2E rysunków 1:1); null = szyfrowanie off.
+  String? _peerPubKey;
+
+  // AAD wiążące szyfrogram rysunku z kierunkiem (kontekst 'draw' oddziela od DM).
+  List<int> _drawAad(String sender, String recipient) =>
+      utf8.encode('draw|$sender>$recipient');
+
+  // Kreski z wiersza: odszyfruj (enc) albo odczytaj jawne (strokes/grupa).
+  Future<List<Stroke>> _decodeStrokes(Map<String, dynamic> row) async {
+    final enc = row['enc'] as String?;
+    if (enc != null && enc.isNotEmpty) {
+      final sender = (row['sender'] as String?) ?? '';
+      final recipient = (row['recipient'] as String?) ?? '';
+      final json =
+          await E2E.decrypt(enc, _peerPubKey, aad: _drawAad(sender, recipient));
+      if (json == null) return const <Stroke>[]; // nie da się odszyfrować
+      try {
+        return (jsonDecode(json) as List)
+            .map((e) => Stroke.fromJson(e as Map<String, dynamic>))
+            .toList();
+      } catch (_) {
+        return const <Stroke>[];
+      }
+    }
+    if (row['strokes'] is List) {
+      return (row['strokes'] as List)
+          .map((e) => Stroke.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    return const <Stroke>[];
+  }
 
   // Emotka dołączana do powiadomienia push u odbiorcy („X przysłał Ci rysunek ❤️").
   String _notifEmoji = '🥫';
@@ -379,7 +416,9 @@ class _DrawingScreenState extends State<DrawingScreen>
       });
 
     _subscribe();
-    _loadHistory();
+    // Klucze E2E + profil rozmówcy (klucz publiczny) MUSZĄ być gotowe przed
+    // dekodowaniem historii, żeby zaszyfrowane rysunki dało się odszyfrować.
+    _initE2EThenHistory();
     _loadStreak();
     loadCanvasColor().then((c) {
       if (mounted) setState(() => _canvasChoice = c);
@@ -390,8 +429,13 @@ class _DrawingScreenState extends State<DrawingScreen>
         setState(() => _notifEmoji = e);
       }
     });
-    _loadPeerAvatar();
     _loadUnreadMsgs();
+  }
+
+  Future<void> _initE2EThenHistory() async {
+    await E2E.ensureKeys();
+    await _loadPeerAvatar(); // ustawia _peerPubKey (+ avatar)
+    await _loadHistory(); // dekoduje/odszyfrowuje z użyciem _peerPubKey
   }
 
   // Liczba nieprzeczytanych wiadomości DM od tej osoby (oczko na ikonie czatu).
@@ -454,7 +498,10 @@ class _DrawingScreenState extends State<DrawingScreen>
           .eq('id', widget.peerId!)
           .maybeSingle();
       if (mounted && row != null) {
-        setState(() => _peerAvatar = row['avatar_url'] as String?);
+        setState(() {
+          _peerAvatar = row['avatar_url'] as String?;
+          _peerPubKey = row['public_key'] as String?;
+        });
       }
     } catch (_) {}
   }
@@ -521,9 +568,11 @@ class _DrawingScreenState extends State<DrawingScreen>
                   'and(sender.eq.${widget.peerId},recipient.eq.$myId)')
               .order('created_at', ascending: false)
               .limit(50);
-      final items = (rows as List)
-          .map((r) => ReceivedDrawing.fromRow(r as Map<String, dynamic>, myId))
-          .toList();
+      final items = <ReceivedDrawing>[];
+      for (final r in (rows as List).cast<Map<String, dynamic>>()) {
+        final strokes = await _decodeStrokes(r); // odszyfruj E2E, jeśli enc
+        items.add(ReceivedDrawing.fromRow(r, myId, strokes: strokes));
+      }
       await _labelHistory(items);
       if (mounted) {
         setState(() {
@@ -581,8 +630,8 @@ class _DrawingScreenState extends State<DrawingScreen>
     }
   }
 
-  void _onIncoming(PostgresChangePayload payload) {
-    final rec = payload.newRecord;
+  void _onIncoming(PostgresChangePayload payload) async {
+    final rec = Map<String, dynamic>.from(payload.newRecord);
     if (widget.isGroup) {
       // grupa: rysunki tej grupy, ale nie własne echo (self-kopia)
       if (rec['group_id'] != widget.groupId || rec['sender'] == myId) return;
@@ -590,10 +639,9 @@ class _DrawingScreenState extends State<DrawingScreen>
       // 1:1: tylko od peera i tylko nie-grupowe
       if (rec['group_id'] != null || rec['sender'] != widget.peerId) return;
     }
-    final received = ReceivedDrawing.fromRow(
-      Map<String, dynamic>.from(payload.newRecord),
-      myId,
-    );
+    final strokes = await _decodeStrokes(rec); // odszyfruj E2E, jeśli enc
+    if (!mounted) return;
+    final received = ReceivedDrawing.fromRow(rec, myId, strokes: strokes);
     debugPrint('TINCAN_RX: odebrano ${received.strokes.length} kresek od ${received.sender}');
 
     // Ładna nazwa „od kogo" w historii (1:1 od ręki; grupa — dociągnij).
@@ -844,23 +892,36 @@ class _DrawingScreenState extends State<DrawingScreen>
           'p_strokes': strokesJson,
         });
       } else {
-        // .select() zwraca wstawiony wiersz — bierzemy id do śledzenia odczytu.
-        // notif_emoji = emotka do powiadomienia; jeśli kolumny jeszcze nie ma
-        // w bazie (przed migracją), ponawiamy wysyłkę bez niej.
+        // E2E: gdy rozmówca ma klucz, szyfrujemy CAŁĄ listę kresek (JSON) i
+        // zapisujemy w enc; strokes zostaje puste. Bez klucza -> jawnie.
+        final enc = await E2E.encrypt(jsonEncode(strokesJson), _peerPubKey,
+            aad: _drawAad(myId, widget.peerId!));
         final row = <String, dynamic>{
           'sender': myId,
           'recipient': widget.peerId,
-          'strokes': strokesJson,
+          'strokes': enc == null ? strokesJson : const <dynamic>[],
           'notif_emoji': _notifEmoji,
+          'enc': ?enc,
         };
         Map<String, dynamic> inserted;
         try {
           inserted =
               await supabase.from('drawings').insert(row).select('id').single();
-        } on PostgrestException {
-          row.remove('notif_emoji');
-          inserted =
-              await supabase.from('drawings').insert(row).select('id').single();
+        } on PostgrestException catch (e) {
+          // TYLKO gdy kolumny enc/notif_emoji jeszcze nie ma (przed migracją) —
+          // wtedy jawny zapis. Inne błędy (sieć) rzucamy dalej, by NIE wysłać
+          // przypadkiem jawnego rysunku, który miał być zaszyfrowany.
+          final missingCol = e.code == '42703' || e.code == 'PGRST204';
+          if (!missingCol) rethrow;
+          inserted = await supabase
+              .from('drawings')
+              .insert({
+                'sender': myId,
+                'recipient': widget.peerId,
+                'strokes': strokesJson,
+              })
+              .select('id')
+              .single();
         }
         newId = inserted['id'] as String?;
       }
