@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
@@ -45,6 +48,27 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _peerAvatar; // zdjęcie profilowe rozmówcy (base64) do nagłówka
   String? _peerPubKey; // klucz publiczny rozmówcy (E2E); null = szyfrowanie off
   bool _keyChanged = false; // klucz rozmówcy zmienił się od ostatniego razu
+
+  // Wskaźnik „pisze…" (broadcast na wspólnym kanale, throttling 1,5 s).
+  bool _peerTyping = false;
+  Timer? _typingHide;
+  DateTime _lastTypingSent = DateTime.fromMillisecondsSinceEpoch(0);
+
+  void _onTyping(String _) {
+    final now = DateTime.now();
+    if (now.difference(_lastTypingSent).inMilliseconds < 1500) return;
+    _lastTypingSent = now;
+    try {
+      _channel?.sendBroadcastMessage(event: 'typing', payload: {'u': myId});
+    } catch (_) {}
+  }
+
+  // Czy user jest przy dole listy (wtedy nowe wiadomości dolepiamy scrollem).
+  bool _nearBottom([double threshold = 160]) {
+    if (!_scroll.hasClients) return true;
+    final p = _scroll.position;
+    return p.maxScrollExtent - p.pixels < threshold;
+  }
 
   // AAD wiążące szyfrogram z kierunkiem nadawca>odbiorca (kontekst 'dm' oddziela
   // szyfrogramy wiadomości od rysunków — nie da się ich pomylić/podmienić).
@@ -142,8 +166,22 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _subscribe() {
+    // Kanał WSPÓLNY dla obu stron (posortowana para id) — dzięki temu broadcast
+    // „pisze…" trafia do rozmówcy. Bindingi postgres_changes działają jak dotąd.
+    final pair = [myId, widget.peerId]..sort();
     _channel = supabase
-        .channel('messages:$myId:${widget.peerId}')
+        .channel('dm:${pair[0]}:${pair[1]}')
+        .onBroadcast(
+          event: 'typing',
+          callback: (payload) {
+            if (payload['u'] != widget.peerId) return;
+            _typingHide?.cancel();
+            if (mounted) setState(() => _peerTyping = true);
+            _typingHide = Timer(const Duration(milliseconds: 3500), () {
+              if (mounted) setState(() => _peerTyping = false);
+            });
+          },
+        )
         .onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
@@ -158,8 +196,14 @@ class _ChatScreenState extends State<ChatScreen> {
             if (rec['sender'] != widget.peerId) return; // tylko ta rozmowa
             await _decryptRow(rec); // odszyfruj zanim pokażesz
             if (!mounted) return;
-            setState(() => _messages.add(rec));
-            _scrollToEnd();
+            // Doklej dół tylko, gdy user JEST przy dole (nie wyrywaj z historii).
+            final stick = _nearBottom();
+            _typingHide?.cancel();
+            setState(() {
+              _peerTyping = false; // wiadomość przyszła -> koniec „pisze…"
+              _messages.add(rec);
+            });
+            _scrollToEnd(force: stick);
             _markRead(); // czytam na żywo — od razu ✓ u nadawcy
           },
         )
@@ -174,11 +218,18 @@ class _ChatScreenState extends State<ChatScreen> {
             value: myId,
           ),
           callback: (payload) {
-            final rec = payload.newRecord;
+            final rec = Map<String, dynamic>.from(payload.newRecord);
             if (rec['recipient'] != widget.peerId) return;
             final i = _messages.indexWhere((m) => m['id'] == rec['id']);
             if (i < 0) return;
-            setState(() => _messages[i] = Map<String, dynamic>.from(rec));
+            // E2E FIX: surowy wiersz ma body='' (treść w enc) — NIE nadpisuj
+            // lokalnie odszyfrowanej treści; przejmij tylko metadane (read_at).
+            final old = _messages[i];
+            if (((rec['enc'] as String?) ?? '').isNotEmpty) {
+              rec['body'] = old['body'];
+              if (old['_locked'] == true) rec['_locked'] = true;
+            }
+            setState(() => _messages[i] = rec);
           },
         )
         // Reakcje: RLS oddaje tylko reakcje z moich rozmów; filtrujemy po stronie
@@ -330,14 +381,6 @@ class _ChatScreenState extends State<ChatScreen> {
       final XFile? file = await _picker.pickImage(source: ImageSource.gallery);
       if (file == null) return;
       final bytes = await file.readAsBytes();
-      if (bytes.lengthInBytes > 8 * 1024 * 1024) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Plik za duży (max 8 MB).')));
-        }
-        return;
-      }
-      setState(() => _uploading = true);
       final ext = file.name.contains('.')
           ? file.name.split('.').last.toLowerCase()
           : 'jpg';
@@ -347,6 +390,29 @@ class _ChatScreenState extends State<ChatScreen> {
         'webp' => 'image/webp',
         _ => 'image/jpeg',
       };
+      await _sendImageBytes(bytes, ext, contentType);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Nie wysłano obrazka: $e')));
+      }
+    }
+  }
+
+  // Wspólna wysyłka bajtów obrazka/GIF-a — używana przez galerię ORAZ
+  // wklejki z klawiatury (GIF-y/naklejki Samsung/Gboard przez commitContent).
+  Future<void> _sendImageBytes(
+      Uint8List bytes, String ext, String contentType) async {
+    if (_uploading) return;
+    if (bytes.lengthInBytes > 8 * 1024 * 1024) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Plik za duży (max 8 MB).')));
+      }
+      return;
+    }
+    setState(() => _uploading = true);
+    try {
       final path = '$myId/${DateTime.now().millisecondsSinceEpoch}.$ext';
       await supabase.storage.from('chat-media').uploadBinary(
             path,
@@ -362,8 +428,9 @@ class _ChatScreenState extends State<ChatScreen> {
             'body': '',
             'image_url': url,
           })
-          .select('id, sender, recipient, body, image_url, created_at')
+          .select()
           .single();
+      if (!mounted) return;
       setState(() => _messages.add(inserted));
       _scrollToEnd();
     } catch (e) {
@@ -502,20 +569,31 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  void _scrollToEnd() {
+  // force=false -> nie ruszaj (user czyta historię). Po animacji druga korekta:
+  // obrazki doładowują się async i wydłużają listę, przez co pierwszy scroll
+  // lądował ZA krótko i czat „zostawał w miejscu".
+  void _scrollToEnd({bool force = true}) {
+    if (!force) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.animateTo(
-          _scroll.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOut,
-        );
-      }
+      if (!mounted || !_scroll.hasClients) return;
+      _scroll.animateTo(
+        _scroll.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+      Future.delayed(const Duration(milliseconds: 450), () {
+        if (!mounted || !_scroll.hasClients) return;
+        final p = _scroll.position;
+        if (p.maxScrollExtent - p.pixels > 8) {
+          _scroll.jumpTo(p.maxScrollExtent);
+        }
+      });
     });
   }
 
   @override
   void dispose() {
+    _typingHide?.cancel();
     _input.dispose();
     _scroll.dispose();
     final ch = _channel;
@@ -555,36 +633,69 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             if (_keyChanged) _keyChangedBanner(),
             Expanded(
-              child: _loading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _messages.isEmpty
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(28),
-                            child: Text(
-                              'Napiszcie pierwszą wiadomość ✍️',
-                              textAlign: TextAlign.center,
-                              style: handStyle(size: 24),
-                            ),
+              child: Stack(
+                children: [
+                  Positioned.fill(child: _messagesArea()),
+                  // „pisze…" — dymek jak wiadomość rozmówcy, nad paskiem pisania
+                  if (_peerTyping)
+                    Positioned(
+                      left: 12,
+                      bottom: 6,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 11),
+                        decoration: BoxDecoration(
+                          color: Color.alphaBlend(
+                              TC.coral
+                                  .withValues(alpha: TC.dark ? 0.30 : 0.16),
+                              TC.paper),
+                          borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(18),
+                            topRight: Radius.circular(18),
+                            bottomLeft: Radius.circular(5),
+                            bottomRight: Radius.circular(18),
                           ),
-                        )
-                      : ListView.builder(
-                          controller: _scroll,
-                          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                          itemCount: _messages.length,
-                          itemBuilder: (_, i) => Column(
-                            children: [
-                              if (_needsTimeStamp(i)) _timeStamp(_messages[i]),
-                              _bubble(_messages[i]),
-                            ],
-                          ),
+                          border: Border.all(
+                              color: TC.coral.withValues(alpha: 0.28)),
                         ),
+                        child: const _TypingDots(),
+                      ),
+                    ),
+                ],
+              ),
             ),
             _inputBar(),
           ],
         ),
       ),
     );
+  }
+
+  Widget _messagesArea() {
+    return _loading
+        ? const Center(child: CircularProgressIndicator())
+        : _messages.isEmpty
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(28),
+                  child: Text(
+                    'Napiszcie pierwszą wiadomość ✍️',
+                    textAlign: TextAlign.center,
+                    style: handStyle(size: 24),
+                  ),
+                ),
+              )
+            : ListView.builder(
+                controller: _scroll,
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                itemCount: _messages.length,
+                itemBuilder: (_, i) => Column(
+                  children: [
+                    if (_needsTimeStamp(i)) _timeStamp(_messages[i]),
+                    _bubble(_messages[i]),
+                  ],
+                ),
+              );
   }
 
   // Kółko profilowe rozmówcy w nagłówku: zdjęcie albo brandowy placeholder z
@@ -818,24 +929,66 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   // Reakcje pod dymkiem (emoji obecnych reakcji; moja = obwódka fioletowa).
+  // Tap na chip = mały baner z listą, KTO jak zareagował.
   Widget _reactionChip(String messageId) {
     final reacs = _reactions[messageId];
     if (reacs == null || reacs.isEmpty) return const SizedBox.shrink();
     final mine = reacs[myId];
-    return Container(
-      margin: const EdgeInsets.only(top: 1, bottom: 3),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: TC.glass,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: mine != null
-              ? TC.brand.withValues(alpha: 0.55)
-              : TC.ink.withValues(alpha: 0.1),
+    return GestureDetector(
+      onTap: () => _showReactionAuthors(messageId),
+      child: Container(
+        margin: const EdgeInsets.only(top: 1, bottom: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+          color: TC.glass,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: mine != null
+                ? TC.brand.withValues(alpha: 0.55)
+                : TC.ink.withValues(alpha: 0.1),
+          ),
+        ),
+        child: Text(reacs.values.map(_fixEmoji).join(' '),
+            style: _emojiStyle.copyWith(fontSize: 13)),
+      ),
+    );
+  }
+
+  // Kto zareagował — mały arkusz: emoji + imię (w DM: Ty albo rozmówca).
+  void _showReactionAuthors(String messageId) {
+    final reacs = _reactions[messageId];
+    if (reacs == null || reacs.isEmpty) return;
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(22, 16, 22, 22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Reakcje', style: Theme.of(ctx).textTheme.titleMedium),
+              const SizedBox(height: 12),
+              for (final e in reacs.entries)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Row(
+                    children: [
+                      Text(_fixEmoji(e.value),
+                          style: _emojiStyle.copyWith(fontSize: 24)),
+                      const SizedBox(width: 12),
+                      Text(
+                        e.key == myId ? 'Ty' : widget.peerLabel,
+                        style: TextStyle(
+                            fontWeight: FontWeight.w600, color: TC.ink),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
-      child: Text(reacs.values.map(_fixEmoji).join(' '),
-          style: _emojiStyle.copyWith(fontSize: 13)),
     );
   }
 
@@ -898,10 +1051,18 @@ class _ChatScreenState extends State<ChatScreen> {
                     color: TC.inkSoft,
                   ),
             IconButton(
+              onPressed: _pickAndSendImage,
+              icon: const Icon(Icons.gif_box_outlined),
+              tooltip: 'GIF (z galerii albo z klawiatury)',
+              color: TC.inkSoft,
+              visualDensity: VisualDensity.compact,
+            ),
+            IconButton(
               onPressed: _openEmojiInsert,
               icon: const Icon(Icons.emoji_emotions_outlined),
               tooltip: 'Emotki',
               color: TC.inkSoft,
+              visualDensity: VisualDensity.compact,
             ),
             Expanded(
               child: TextField(
@@ -909,6 +1070,30 @@ class _ChatScreenState extends State<ChatScreen> {
                 minLines: 1,
                 maxLines: 4,
                 textCapitalization: TextCapitalization.sentences,
+                onChanged: _onTyping,
+                // GIF-y/naklejki wstawiane Z KLAWIATURY (Samsung/Gboard —
+                // commitContent): przychodzą jako bajty -> wysyłamy jak obrazek.
+                contentInsertionConfiguration: ContentInsertionConfiguration(
+                  allowedMimeTypes: const [
+                    'image/gif',
+                    'image/png',
+                    'image/webp',
+                    'image/jpeg',
+                  ],
+                  onContentInserted: (content) {
+                    final data = content.data;
+                    if (data == null || data.isEmpty) return;
+                    final mime = content.mimeType;
+                    final ext = mime.contains('gif')
+                        ? 'gif'
+                        : mime.contains('png')
+                            ? 'png'
+                            : mime.contains('webp')
+                                ? 'webp'
+                                : 'jpg';
+                    _sendImageBytes(Uint8List.fromList(data), ext, mime);
+                  },
+                ),
                 decoration: InputDecoration(
                   hintText: 'Napisz wiadomość…',
                   filled: true,
@@ -944,6 +1129,57 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// Trzy pulsujące kropki wskaźnika „pisze…" (fala jak w komunikatorach).
+class _TypingDots extends StatefulWidget {
+  const _TypingDots();
+
+  @override
+  State<_TypingDots> createState() => _TypingDotsState();
+}
+
+class _TypingDotsState extends State<_TypingDots>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, _) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < 3; i++)
+            Opacity(
+              opacity: (0.30 +
+                      0.70 *
+                          (0.5 +
+                              0.5 *
+                                  math.sin(
+                                      _c.value * 2 * math.pi - i * 0.9)))
+                  .clamp(0.0, 1.0),
+              child: Container(
+                width: 7,
+                height: 7,
+                margin: const EdgeInsets.symmetric(horizontal: 2.5),
+                decoration:
+                    BoxDecoration(color: TC.inkSoft, shape: BoxShape.circle),
+              ),
+            ),
+        ],
       ),
     );
   }
