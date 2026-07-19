@@ -1,0 +1,48 @@
+# Codemagic — build iOS „Tin Can" i wysyłka na TestFlight (bez Maca).
+#
+# Zanim odpalisz pierwszy build, w panelu Codemagic ustaw DWIE rzeczy:
+#  1) Team settings → Integrations → App Store Connect → dodaj klucz API
+#     (plik .p8 + Key ID + Issuer ID). Nadaj mu nazwę i wpisz ją niżej
+#     w polu `app_store_connect:` (zamiast TinCanKey).
+#  2) APP_STORE_APPLE_ID poniżej: App Store Connect → Twoja apka →
+#     App Information → sekcja General Information → „Apple ID" (sam numer).
+#
+# Build startujesz RĘCZNIE z panelu Codemagic (nie pali minut na każdy push).
+# Push (powiadomienia) celowo pominięte — apka zbuduje się i zadziała
+# (rysowanie, czat, E2E, obrazki); APNs/Firebase iOS dodamy osobnym krokiem.
+
+workflows:
+  ios-testflight:
+    name: Tin Can — iOS TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: TinCanKey        # <-- ZMIEŃ na nazwę Twojego klucza w Codemagic
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: pl.themike07.tincan
+      vars:
+        APP_STORE_APPLE_ID: 0000000000     # <-- WPISZ Apple ID apki (sam numer)
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Pakiety Flutter
+        script: flutter pub get
+      - name: Podpisywanie (profile z App Store Connect)
+        script: xcode-project use-profiles
+      - name: Build IPA (numer wersji z ostatniego builda TestFlight)
+        script: |
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo 0)
+          flutter build ipa --release \
+            --build-name=1.3.1 \
+            --build-number=$((LATEST + 1)) \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true          # wrzuca build prosto na TestFlight
