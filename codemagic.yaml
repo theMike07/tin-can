@@ -2,10 +2,9 @@
 #
 # Klucz App Store Connect w Codemagic pod nazwą „Codemagic" — MUSI mieć rolę
 # ADMIN (App Manager nie tworzy certyfikatów podpisujących).
-# APP_STORE_APPLE_ID = Apple ID apki (App Store Connect → App Information).
-# Automatyczne podpisywanie Codemagic (ios_signing) samo tworzy i przechowuje
-# certyfikat dystrybucyjny + profil App Store dla podanego bundle id.
-# Build startujesz RĘCZNIE z panelu. Push (APNs/Firebase iOS) dodamy osobno.
+# Jawne podpisywanie: tworzymy certyfikat dystrybucyjny ORAZ profil App Store
+# (automatyczny tryb Codemagic nie tworzy profilu — tylko pobiera istniejący).
+# APP_STORE_APPLE_ID = Apple ID apki. Build startujesz RĘCZNIE z panelu.
 
 workflows:
   ios-testflight:
@@ -15,11 +14,9 @@ workflows:
     integrations:
       app_store_connect: Codemagic        # klucz App Store Connect (rola ADMIN)
     environment:
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: pl.themike07.tincan
       vars:
         APP_STORE_APPLE_ID: 6792543062     # Apple ID apki
+        BUNDLE_ID: pl.themike07.tincan
       flutter: stable
       xcode: latest
       cocoapods: default
@@ -28,8 +25,17 @@ workflows:
         script: flutter config --no-enable-swift-package-manager
       - name: Pakiety Flutter
         script: flutter pub get
-      - name: Podpisywanie (certyfikat + profil z App Store Connect)
-        script: xcode-project use-profiles
+      - name: Podpisywanie — UTWÓRZ certyfikat dystrybucyjny + profil App Store
+        script: |
+          keychain initialize
+          # certyfikat dystrybucyjny (+ prywatny klucz); jeśli już jest — pomiń
+          app-store-connect certificates create --type IOS_DISTRIBUTION --save || true
+          # profil App Store dla bundle id (utwórz jeśli brak)
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create
+          keychain add-certificates
+          xcode-project use-profiles
       - name: Build IPA (numer wersji z ostatniego builda TestFlight)
         script: |
           LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo 0)
