@@ -27,12 +27,15 @@ workflows:
         script: flutter pub get
       - name: Podpisywanie — UTWÓRZ certyfikat dystrybucyjny + profil App Store
         script: |
+          set -e
           keychain initialize
-          # certyfikat dystrybucyjny (+ prywatny klucz); jeśli już jest — pomiń
-          app-store-connect certificates create --type IOS_DISTRIBUTION --save || true
-          # profil App Store dla bundle id (utwórz jeśli brak)
+          # Prywatny klucz RSA — POTRZEBNY, żeby móc UTWORZYĆ certyfikat
+          # dystrybucyjny (bez niego fetch-signing-files robił tylko profil).
+          ssh-keygen -t rsa -b 2048 -m PEM -f /tmp/tincan_key -q -N ""
+          # Certyfikat (tym kluczem) + profil App Store — utwórz jeśli brak.
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
+            --certificate-key=@file:/tmp/tincan_key \
             --create
           keychain add-certificates
           xcode-project use-profiles
