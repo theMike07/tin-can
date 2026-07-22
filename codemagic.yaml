@@ -21,6 +21,8 @@ workflows:
       xcode: latest
       cocoapods: default
     scripts:
+      - name: Wyłącz Swift Package Manager (Firebase iOS stabilniej na CocoaPods)
+        script: flutter config --no-enable-swift-package-manager
       - name: Pakiety Flutter
         script: flutter pub get
       - name: Podpisywanie — UTWÓRZ/pobierz certyfikat i profil App Store
