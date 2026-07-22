@@ -17,13 +17,13 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 60
     integrations:
-      app_store_connect: TinCanKey        # <-- ZMIEŃ na nazwę Twojego klucza w Codemagic
+      app_store_connect: Codemagic        # nazwa klucza App Store Connect w Codemagic
     environment:
       ios_signing:
         distribution_type: app_store
         bundle_identifier: pl.themike07.tincan
       vars:
-        APP_STORE_APPLE_ID: 0000000000     # <-- WPISZ Apple ID apki (sam numer)
+        APP_STORE_APPLE_ID: 6792543062     # Apple ID apki (App Store Connect → App Information)
       flutter: stable
       xcode: latest
       cocoapods: default
